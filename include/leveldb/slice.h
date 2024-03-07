@@ -24,21 +24,31 @@
 
 namespace leveldb {
 
+// Slice与c++的string类似，那么为什么不直接使用string呢？Slice有什么优势？
+// 1. Slice是一个简单的结构，只包含一个指向外部存储的指针和一个大小。Slice的用户必须确保在相应的外部存储被释放后，Slice不再被使用。
+// 2. 多个线程可以在没有外部同步的情况下调用Slice的const方法，但是如果任何一个线程可能调用非const方法，那么所有访问同一个Slice的线程都必须使用外部同步。
+// 3. Slice的实现是线程安全的，因为它只包含一个指针和一个大小，没有状态。
+// 4. Slice不以'\0'结尾，因此可以包含任意的二进制数据。
 class LEVELDB_EXPORT Slice {
  public:
   // Create an empty slice.
+  // 创建一个空的slice
   Slice() : data_(""), size_(0) {}
 
   // Create a slice that refers to d[0,n-1].
+  // 创建一个slice，指向d[0,n-1]
   Slice(const char* d, size_t n) : data_(d), size_(n) {}
 
   // Create a slice that refers to the contents of "s"
+  // 创建一个slice，指向s的内容，即将string转换为slice
   Slice(const std::string& s) : data_(s.data()), size_(s.size()) {}
 
   // Create a slice that refers to s[0,strlen(s)-1]
+  // 创建一个slice，指向s[0,strlen(s)-1]
   Slice(const char* s) : data_(s), size_(strlen(s)) {}
 
   // Intentionally copyable.
+  // overloading the copy constructor and copy assignment operator
   Slice(const Slice&) = default;
   Slice& operator=(const Slice&) = default;
 

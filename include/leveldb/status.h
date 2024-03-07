@@ -78,11 +78,11 @@ class LEVELDB_EXPORT Status {
  private:
   enum Code {
     kOk = 0,
-    kNotFound = 1,
-    kCorruption = 2,
-    kNotSupported = 3,
-    kInvalidArgument = 4,
-    kIOError = 5
+    kNotFound = 1, // 未找到相关数据
+    kCorruption = 2, // 数据异常崩溃
+    kNotSupported = 3, // 不支持的操作
+    kInvalidArgument = 4, // 非法参数
+    kIOError = 5 // IO错误
   };
 
   Code code() const {
@@ -97,6 +97,10 @@ class LEVELDB_EXPORT Status {
   //    state_[0..3] == length of message
   //    state_[4]    == code
   //    state_[5..]  == message
+  // 当status_为OK时，state_为nullptr。否则，state_是一个新的数组，格式如下：
+  //    state_[0..3] == 消息的长度
+  //    state_[4]    == 状态码
+  //    state_[5..]  == 消息内容
   const char* state_;
 };
 

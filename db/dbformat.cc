@@ -68,15 +68,19 @@ void InternalKeyComparator::FindShortestSeparator(std::string* start,
   Slice user_start = ExtractUserKey(*start);
   Slice user_limit = ExtractUserKey(limit);
   std::string tmp(user_start.data(), user_start.size());
+  // 注意user_comparator_一般是BytewiseComparatorImpl类型
   user_comparator_->FindShortestSeparator(&tmp, user_limit);
   if (tmp.size() < user_start.size() &&
       user_comparator_->Compare(user_start, tmp) < 0) {
     // User key has become shorter physically, but larger logically.
     // Tack on the earliest possible number to the shortened user key.
+    // 用户key在物理上变得更短，但在逻辑上变得更大。
+    // 给tmp加上序列号和类型？
     PutFixed64(&tmp,
                PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
     assert(this->Compare(*start, tmp) < 0);
     assert(this->Compare(tmp, limit) < 0);
+    // 压缩后的字符串比较结果:start < tmp < limit
     start->swap(tmp);
   }
 }
@@ -89,8 +93,11 @@ void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
       user_comparator_->Compare(user_key, tmp) < 0) {
     // User key has become shorter physically, but larger logically.
     // Tack on the earliest possible number to the shortened user key.
+    // 用户key在物理上变得更短，但在逻辑上变得更大。
+    // 给tmp加上序列号和类型？
     PutFixed64(&tmp,
                PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
+    // 压缩后的字符串比较结果:user_key < tmp
     assert(this->Compare(*key, tmp) < 0);
     key->swap(tmp);
   }
