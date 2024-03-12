@@ -36,6 +36,8 @@ namespace {
 // combines multiple entries for the same userkey found in the DB
 // representation into a single entry while accounting for sequence
 // numbers, deletion markers, overwrites, etc.
+// Memtables和sstables构成了DB的数据载体，它们包含了(userkey,seq,type) => uservalue的条目。
+// DBIter将DB数据载体中相同userkey的多个条目合并成一个条目，在合并的过程中考虑了sequence number、删除标记、覆盖等。
 class DBIter : public Iterator {
  public:
   // Which direction is the iterator currently moving?
