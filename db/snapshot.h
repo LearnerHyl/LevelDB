@@ -14,6 +14,8 @@ class SnapshotList;
 
 // Snapshots are kept in a doubly-linked list in the DB.
 // Each SnapshotImpl corresponds to a particular sequence number.
+// 快照在DB中以双向链表的形式保存。
+// 每个SnapshotImpl对应一个特定的序列号。
 class SnapshotImpl : public Snapshot {
  public:
   SnapshotImpl(SequenceNumber sequence_number)
@@ -26,6 +28,7 @@ class SnapshotImpl : public Snapshot {
 
   // SnapshotImpl is kept in a doubly-linked circular list. The SnapshotList
   // implementation operates on the next/previous fields directly.
+  // SnapshotImpl保存在一个双向循环链表中。SnapshotList实现直接操作next/previous字段。
   SnapshotImpl* prev_;
   SnapshotImpl* next_;
 

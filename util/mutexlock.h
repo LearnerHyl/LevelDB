@@ -12,6 +12,7 @@ namespace leveldb {
 
 // Helper class that locks a mutex on construction and unlocks the mutex when
 // the destructor of the MutexLock object is invoked.
+// 帮助类，构造时锁定互斥锁，当MutexLock对象的析构函数被调用时解锁互斥锁。
 //
 // Typical usage:
 //

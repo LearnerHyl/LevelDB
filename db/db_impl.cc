@@ -40,15 +40,16 @@ namespace leveldb {
 const int kNumNonTableCacheFiles = 10;
 
 // Information kept for every waiting writer
+// 为每个等待的写入者保留的信息
 struct DBImpl::Writer {
   explicit Writer(port::Mutex* mu)
       : batch(nullptr), sync(false), done(false), cv(mu) {}
 
-  Status status;
-  WriteBatch* batch;
-  bool sync;
-  bool done;
-  port::CondVar cv;
+  Status status; // 用于存储写入操作的状态信息
+  WriteBatch* batch; // 指向待写入的批处理数据（WriteBatch）的指针
+  bool sync; // 是否同步写入(即是否需要等待写入完成)
+  bool done; // 是否写入完成
+  port::CondVar cv; // 条件变量,用于等待写入完成
 };
 
 struct DBImpl::CompactionState {
@@ -295,6 +296,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // Ignore error from CreateDir since the creation of the DB is
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
+  // 忽略CreateDir的错误，因为只有在创建descriptor时才会提交DB的创建，而且这个目录可能已经存在于之前的创建尝试失败中。
   env_->CreateDir(dbname_);
   assert(db_lock_ == nullptr);
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
@@ -302,7 +304,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     return s;
   }
 
-  if (!env_->FileExists(CurrentFileName(dbname_))) {
+  if (!env_->FileExists(CurrentFileName(dbname_))) { // 若当前目录下不存在名为dbname_的文件
     if (options_.create_if_missing) {
       Log(options_.info_log, "Creating DB %s since it was missing.",
           dbname_.c_str());
@@ -330,10 +332,12 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // Recover from all newer log files than the ones named in the
   // descriptor (new log files may have been added by the previous
   // incarnation without registering them in the descriptor).
+  // 只从比descriptor中命名的log文件更新的log文件中恢复（新的log文件可能已经被之前的版本添加，但没有在descriptor中注册）。
   //
   // Note that PrevLogNumber() is no longer used, but we pay
   // attention to it in case we are recovering a database
   // produced by an older version of leveldb.
+  // 注意，PrevLogNumber()不再使用，但是我们在恢复由旧版本的leveldb生成的数据库时会注意到它。
   const uint64_t min_log = versions_->LogNumber();
   const uint64_t prev_log = versions_->PrevLogNumber();
   std::vector<std::string> filenames;
@@ -372,6 +376,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     // The previous incarnation may not have written any MANIFEST
     // records after allocating this log number.  So we manually
     // update the file number allocation counter in VersionSet.
+    // 之前的版本可能在分配这个log number之后没有写入任何MANIFEST记录。所以我们手动更新VersionSet中的文件编号分配计数器。
     versions_->MarkFileNumberUsed(logs[i]);
   }
 
@@ -1117,16 +1122,19 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   Status s;
   MutexLock l(&mutex_);
   SequenceNumber snapshot;
-  if (options.snapshot != nullptr) {
+  // 尝试获取Get操作对应的SequenceNumber
+  if (options.snapshot != nullptr) { // 若options中指定了sequence number,则直接使用
     snapshot =
         static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
-  } else {
+  } else { // 若没有指定,则使用当前的SequenceNumber
     snapshot = versions_->LastSequence();
   }
 
+  // 获取对应的memtable和不可变的memtable,以及当前的Version
   MemTable* mem = mem_;
   MemTable* imm = imm_;
   Version* current = versions_->current();
+  // 为memtable、不可变的memtable和Version增加引用
   mem->Ref();
   if (imm != nullptr) imm->Ref();
   current->Ref();
@@ -1138,21 +1146,25 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   {
     mutex_.Unlock();
     // First look in the memtable, then in the immutable memtable (if any).
-    LookupKey lkey(key, snapshot);
-    if (mem->Get(lkey, value, &s)) {
+    // 先在memtable中查找,然后在不可变的memtable中查找(如果有的话)。
+    LookupKey lkey(key, snapshot); // 根据key和SequenceNumber创建LookupKey对象
+    if (mem->Get(lkey, value, &s)) { // 先从memtable中查找
       // Done
-    } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
+    } else if (imm != nullptr && imm->Get(lkey, value, &s)) { // 若memtable中没有找到,则从不可变的memtable中查找
       // Done
-    } else {
+    } else { // 若不可变的memtable中也没有找到,则从sstable文件中查找
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
     }
     mutex_.Lock();
   }
 
+  // 如果在sstable文件中找到了,则更新统计信息，并根据情况进行压缩
   if (have_stat_update && current->UpdateStats(stats)) {
     MaybeScheduleCompaction();
   }
+  // 查找完毕后，释放对memtable、不可变的memtable和Version的引用
+  // Note：当引用计数为0时，说明当前没有用户在使用该对象，可以触发GC操作
   mem->Unref();
   if (imm != nullptr) imm->Unref();
   current->Unref();
@@ -1198,14 +1210,20 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
 }
 
 Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
+  // 首先实例化一个Writer对象，用于记录当前写操作的相关信息
   Writer w(&mutex_);
   w.batch = updates;
   w.sync = options.sync;
   w.done = false;
 
-  MutexLock l(&mutex_);
+  // 将当前写操作加入到writers_队列中
+  MutexLock l(&mutex_); // 注意这是一个ScopedLock对象，当离开作用域时，会自动释放锁
   writers_.push_back(&w);
+  // 这里的同步方式很像CS162中讲述的Mesa调度模型，即使被唤醒了，也需要重新检查条件
+  // 这确保了在当前写操作完成之前，不会有其他写操作被执行
   while (!w.done && &w != writers_.front()) {
+    // 如果当前写操作不是队列中的第一个操作，则等待
+    // 条件变量的wait()一般是睡眠当前线程，等待被唤醒
     w.cv.Wait();
   }
   if (w.done) {
@@ -1213,20 +1231,28 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   }
 
   // May temporarily unlock and wait.
+  // 首先使用MakeRoomForWrite()函数来确保有足够的空间来执行写操作
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence();
   Writer* last_writer = &w;
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
     WriteBatch* write_batch = BuildBatchGroup(&last_writer);
+    // 将当前写操作的SequenceNumber设置为last_sequence+1，即起始值为last_sequence+1
     WriteBatchInternal::SetSequence(write_batch, last_sequence + 1);
+    // 依据批量写操作的大小来更新last_sequence，当本次写操作成功后，这就是新的last_sequence值
     last_sequence += WriteBatchInternal::Count(write_batch);
 
     // Add to log and apply to memtable.  We can release the lock
     // during this phase since &w is currently responsible for logging
     // and protects against concurrent loggers and concurrent writes
     // into mem_.
+    // 添加到日志文件中，并将其应用到memtable中。我们可以在这个阶段释放锁，因为&w当前负责记录日志，
+    // 并保护记录操作免受并发的loggers和并发写入memtable的影响。
+    // 本质在于，没有signal()唤醒其他写操作，并且上述的queue机制确保了只有头部的写操作才会被执行，单线程机制
     {
       mutex_.Unlock();
+      // 将写操作记录到日志文件中，并将日志文件刷盘
+      // 在此期间允许新的写操作被放入writers_队列中，但是不会被执行
       status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
       bool sync_error = false;
       if (status.ok() && options.sync) {
@@ -1235,34 +1261,43 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
           sync_error = true;
         }
       }
+      // 将写操作应用到memtable中
       if (status.ok()) {
         status = WriteBatchInternal::InsertInto(write_batch, mem_);
       }
       mutex_.Lock();
-      if (sync_error) {
+      if (sync_error) { // 若日志刷盘失败，即使本次写操作有部分成功，也需要将DB置为不可用状态
         // The state of the log file is indeterminate: the log record we
         // just added may or may not show up when the DB is re-opened.
         // So we force the DB into a mode where all future writes fail.
+        // 日志文件的状态是不确定的：我们刚刚添加的日志记录可能会在重新打开DB时显示，也可能不会显示。
+        // 因此，我们强制DB进入一个所有未来写操作都失败的模式。
         RecordBackgroundError(status);
       }
     }
+    // tmp_batch_是一个临时的WriteBatch对象，用于在写操作完成后清空
     if (write_batch == tmp_batch_) tmp_batch_->Clear();
 
     versions_->SetLastSequence(last_sequence);
   }
-
+  // 由于写入操作完成，因此需要将当前写操作从writers_队列中移除
+  // 由于合并写入操作一次可能会处理多个writers_队列中的写操作，因此需要循环处理
   while (true) {
     Writer* ready = writers_.front();
     writers_.pop_front();
+    // 在这个写操作之前的写操作都已经完成，因为在MakeRoomForWrite()函数中，可能会有多个写操作被合并为一个写操作
+    // TODO:只有头部的写操作才会被执行，但是为什么这里会考虑有多个写操作同时完成的情况？
     if (ready != &w) {
       ready->status = status;
       ready->done = true;
       ready->cv.Signal();
     }
+    // 若当前pop的writer_刚好是本次写操作，则退出循环
     if (ready == last_writer) break;
   }
 
   // Notify new head of write queue
+  // 若当前writers_队列不为空，则当前队列头部的写操作可以被执行，唤醒它
   if (!writers_.empty()) {
     writers_.front()->cv.Signal();
   }
@@ -1480,6 +1515,7 @@ void DBImpl::GetApproximateSizes(const Range* range, int n, uint64_t* sizes) {
 
 // Default implementations of convenience methods that subclasses of DB
 // can call if they wish
+// 如果子类想要调用，可以调用DB的默认实现
 Status DB::Put(const WriteOptions& opt, const Slice& key, const Slice& value) {
   WriteBatch batch;
   batch.Put(key, value);
@@ -1497,19 +1533,25 @@ DB::~DB() = default;
 Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   *dbptr = nullptr;
 
+  // 创建一个DBImpl对象
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   VersionEdit edit;
   // Recover handles create_if_missing, error_if_exists
+  // Recover处理create_if_missing和error_if_exists
   bool save_manifest = false;
+  // 尝试恢复之前存在的数据库数据
   Status s = impl->Recover(&edit, &save_manifest);
+  // 若恢复操作成功，且MemTable为空，则创建新的Log和MemTable
   if (s.ok() && impl->mem_ == nullptr) {
     // Create new log and a corresponding memtable.
+    // 创建新的Log和MemTable
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
+    // 创建新的Log文件
     s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
                                      &lfile);
-    if (s.ok()) {
+    if (s.ok()) { // 若创建成功，则创建新的Log::Writer和MemTable
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
       impl->logfile_number_ = new_log_number;
@@ -1518,11 +1560,15 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
       impl->mem_->Ref();
     }
   }
+  // 若恢复操作成功，且save_manifest为true，则将VersionEdit对象写入MANIFEST文件
+  // 注意数据库每应用一个VersionEdit对象，都会写入MANIFEST文件，这代表了数据库相关的元数据信息
   if (s.ok() && save_manifest) {
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
     edit.SetLogNumber(impl->logfile_number_);
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
   }
+  // 若前面的操作都成功了，调用RemoveObsoleteFiles():清理一些无用/过时的文件
+  // 调用MaybeScheduleCompaction():检查是否需要进行Log Compaction操作
   if (s.ok()) {
     impl->RemoveObsoleteFiles();
     impl->MaybeScheduleCompaction();

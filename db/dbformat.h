@@ -64,6 +64,9 @@ typedef uint64_t SequenceNumber;
 
 // We leave eight bits empty at the bottom so a type and sequence#
 // can be packed together into 64-bits.
+// 0x1-ull：意味着是类型为unsigned long long的常量1
+// sequenceNum：一共有64位，8个字节。最高8位是type，低56位是sequence number。
+// 因此我们保留最高8位空间，这样type和sequence number可以被打包到64位中。
 static const SequenceNumber kMaxSequenceNumber = ((0x1ull << 56) - 1);
 
 struct ParsedInternalKey {

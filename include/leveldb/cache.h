@@ -9,11 +9,16 @@
 // capacity.  For example, a cache where the values are variable
 // length strings, may use the length of the string as the charge for
 // the string.
+// Cache是一个将key映射到value的接口。它有内部同步机制，可以安全地被多个线程并发访问。
+// 它可以自动地驱逐条目以为新条目腾出空间。Value对缓存容量有指定的费用。
+// 例如，一个缓存，其中的值是可变长度的字符串，可以使用字符串的长度作为字符串的费用。
 //
 // A builtin cache implementation with a least-recently-used eviction
 // policy is provided.  Clients may use their own implementations if
 // they want something more sophisticated (like scan-resistance, a
 // custom eviction policy, variable cache sizing, etc.)
+// 提供了一个内置的缓存实现，它使用最近最少使用(LRU)的驱逐策略。如果客户端需要更复杂的实现（如抵抗扫描、自定义驱逐策略、可变大小的缓存等），
+// 客户端可以使用自己的实现。
 
 #ifndef STORAGE_LEVELDB_INCLUDE_CACHE_H_
 #define STORAGE_LEVELDB_INCLUDE_CACHE_H_

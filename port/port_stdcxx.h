@@ -58,6 +58,7 @@ class LOCKABLE Mutex {
 
   void Lock() EXCLUSIVE_LOCK_FUNCTION() { mu_.lock(); }
   void Unlock() UNLOCK_FUNCTION() { mu_.unlock(); }
+  // 断言当前线程持有锁，若当前线程未持有锁但调用了AssertHeld()，则会触发断言失败导致程序崩溃
   void AssertHeld() ASSERT_EXCLUSIVE_LOCK() {}
 
  private:

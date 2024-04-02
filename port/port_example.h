@@ -62,12 +62,14 @@ class CondVar {
 
 // Store the snappy compression of "input[0,input_length-1]" in *output.
 // Returns false if snappy is not supported by this port.
+// 存储input[0,input_length-1]的snappy压缩结果到*output中，如果snappy不被支持则返回false。
 bool Snappy_Compress(const char* input, size_t input_length,
                      std::string* output);
 
 // If input[0,input_length-1] looks like a valid snappy compressed
 // buffer, store the size of the uncompressed data in *result and
 // return true.  Else return false.
+// 如果input[0,input_length-1]看起来像一个有效的snappy压缩缓冲区，则将解压缩数据的大小存储在*result中并返回true，否则返回false。
 bool Snappy_GetUncompressedLength(const char* input, size_t length,
                                   size_t* result);
 
@@ -78,6 +80,8 @@ bool Snappy_GetUncompressedLength(const char* input, size_t length,
 // REQUIRES: at least the first "n" bytes of output[] must be writable
 // where "n" is the result of a successful call to
 // Snappy_GetUncompressedLength.
+// 尝试将input[0,input_length-1]解压缩到*output中，如果成功则返回true，如果输入是无效的snappy压缩数据则返回false。
+// 要求output[]的前“n”个字节必须是可写的，其中“n”是对Snappy_GetUncompressedLength的成功调用的结果。
 bool Snappy_Uncompress(const char* input_data, size_t input_length,
                        char* output);
 
@@ -116,5 +120,24 @@ uint32_t AcceleratedCRC32C(uint32_t crc, const char* buf, size_t size);
 
 }  // namespace port
 }  // namespace leveldb
+
+/* A deleted class: AtomicPointer
+AtomicPtr提供了两种读写方式：有屏障和无屏障。这在多核CPU中是非常重要的，因为在多核CPU中，不同核之间的数据是不共享的，所以需要通过屏障来保证数据的一致性。
+1. 若采用有屏障的方式，比如说我们调用了Acquire_Load()-读操作，那么在调用Acquire_Load()之前的所有读写操作都会在调用Acquire_Load()之前执行，
+    而在调用Acquire_Load()之后的所有读写操作都会在调用Acquire_Load()之后执行。
+2. 若采用有屏障的方式，比如说我们调用了Release_Store()-写操作，那么在调用Release_Store()之前的所有读写操作都会在调用Release_Store()之前执行，
+    而在调用Release_Store()之后的所有读写操作都会在调用Release_Store()之后执行。
+class AtomicPointer {
+ private:
+  void* rep_; // 用于存储数据地址
+public:
+  AtomicPointer() : rep_(NULL) { }
+  explicit AtomicPointer(void* v); 
+  void* Acquire_Load() const; // 有屏障的读操作
+  void Release_Store(void* v); // 有屏障的写操作
+  void* NoBarrier_Load() const; // 无屏障的读操作
+  void NoBarrier_Store(void* v); // 无屏障的写操作
+};
+*/
 
 #endif  // STORAGE_LEVELDB_PORT_PORT_EXAMPLE_H_
