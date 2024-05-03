@@ -138,6 +138,26 @@ public:
   void* NoBarrier_Load() const; // 无屏障的读操作
   void NoBarrier_Store(void* v); // 无屏障的写操作
 };
+
+void* AtomicPointer::Acquire_Load() const {
+  void* result = rep_;
+  MemoryBarrier(); // 内存屏障
+  return result;
+}
+
+void AtomicPointer::Release_Store(void* v) {
+  MemoryBarrier(); // 内存屏障
+  rep_ = v;
+}
+
+void* AtomicPointer::NoBarrier_Load() const {
+  return rep_;
+}
+
+void AtomicPointer::NoBarrier_Store(void* v) {
+  rep_ = v;
+}
+
 */
 
 #endif  // STORAGE_LEVELDB_PORT_PORT_EXAMPLE_H_

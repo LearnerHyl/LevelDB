@@ -130,9 +130,11 @@ class Limiter {
 };
 
 // Implements sequential read access in a file using read().
-//
+// 用read()实现文件的顺序读取
+// 
 // Instances of this class are thread-friendly but not thread-safe, as required
 // by the SequentialFile API.
+// 该类的实例是线程友好的，但不是线程安全的，这是SequentialFile API所要求的
 class PosixSequentialFile final : public SequentialFile {
  public:
   PosixSequentialFile(std::string filename, int fd)
@@ -231,19 +233,24 @@ class PosixRandomAccessFile final : public RandomAccessFile {
 };
 
 // Implements random read access in a file using mmap().
+// 使用mmap()实现文件的随机读取。
+// 将文件映射到内存中，然后通过内存访问文件内容，相比于普通的文件读取，mmap()省去了内核空间到用户空间的数据拷贝，提高了文件读取的效率。
 //
 // Instances of this class are thread-safe, as required by the RandomAccessFile
 // API. Instances are immutable and Read() only calls thread-safe library
 // functions.
+// 该类的实例是线程安全的，这是RandomAccessFile API所要求的。实例是不可变的，Read()只调用线程安全的库函数
 class PosixMmapReadableFile final : public RandomAccessFile {
  public:
   // mmap_base[0, length-1] points to the memory-mapped contents of the file. It
   // must be the result of a successful call to mmap(). This instances takes
   // over the ownership of the region.
+  // mmap_base[0, length-1]指向文件的内存映射内容, 它必须是对mmap()的成功调用的结果, 该实例接管了该区域的所有权
   //
   // |mmap_limiter| must outlive this instance. The caller must have already
   // acquired the right to use one mmap region, which will be released when this
   // instance is destroyed.
+  // |mmap_limiter|必须在此实例之前存在, 调用者必须已经获得使用一个mmap区域的权利, 当此实例被销毁时, 将释放该区域
   PosixMmapReadableFile(std::string filename, char* mmap_base, size_t length,
                         Limiter* mmap_limiter)
       : mmap_base_(mmap_base),
@@ -295,6 +302,7 @@ class PosixWritableFile final : public WritableFile {
     const char* write_data = data.data();
 
     // Fit as much as possible into buffer.
+    // 尽可能多的数据写入缓冲区, 如果缓冲区满了, 则将缓冲区的数据写入文件
     size_t copy_size = std::min(write_size, kWritableFileBufferSize - pos_);
     std::memcpy(buf_ + pos_, write_data, copy_size);
     write_data += copy_size;
@@ -333,10 +341,12 @@ class PosixWritableFile final : public WritableFile {
 
   Status Sync() override {
     // Ensure new files referred to by the manifest are in the filesystem.
+    // 确保manifest文件引用的新文件在文件系统中
     //
     // This needs to happen before the manifest file is flushed to disk, to
     // avoid crashing in a state where the manifest refers to files that are not
     // yet on disk.
+    // 这需要在manifest文件刷新到磁盘之前发生, 以避免在manifest引用尚未在磁盘上的文件的状态下崩溃
     Status status = SyncDirIfManifest();
     if (!status.ok()) {
       return status;
@@ -736,10 +746,13 @@ class PosixEnv : public Env {
   uint64_t NowMicros() override {
     static constexpr uint64_t kUsecondsPerSecond = 1000000;
     struct ::timeval tv;
+    // 时区信息默认为nullptr，tv将时间精确到微秒,tv_sec表示当前时间的秒数，tv_usec表示在tv_sec基础上已经过的微秒数
+    // 意味着当前时间的微秒数 = tv_sec * 1000000 + tv_usec
     ::gettimeofday(&tv, nullptr);
     return static_cast<uint64_t>(tv.tv_sec) * kUsecondsPerSecond + tv.tv_usec;
   }
 
+  // 将线程休眠指定的微秒数
   void SleepForMicroseconds(int micros) override {
     std::this_thread::sleep_for(std::chrono::microseconds(micros));
   }
@@ -811,12 +824,14 @@ PosixEnv::PosixEnv()
       mmap_limiter_(MaxMmaps()),
       fd_limiter_(MaxOpenFiles()) {}
 
+// 向bg_work_queue_中添加任务，然后唤醒后台的处理线程
 void PosixEnv::Schedule(
     void (*background_work_function)(void* background_work_arg),
     void* background_work_arg) {
   background_work_mutex_.Lock();
 
   // Start the background thread, if we haven't done so already.
+  // 如果还没有启动后台线程，则启动后台线程，该线程无限循环，等待队列中有任务时执行任务
   if (!started_background_thread_) {
     started_background_thread_ = true;
     std::thread background_thread(PosixEnv::BackgroundThreadEntryPoint, this);
@@ -832,6 +847,7 @@ void PosixEnv::Schedule(
   background_work_mutex_.Unlock();
 }
 
+// 从bg_work_queue_中取出任务，执行任务
 void PosixEnv::BackgroundThreadMain() {
   while (true) {
     background_work_mutex_.Lock();

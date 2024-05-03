@@ -20,6 +20,8 @@ namespace leveldb {
 
 namespace {
 
+// FileState是引用计数的，初始引用计数为0，调用者必须至少调用一次Ref()
+// 调用者不能通过delete删除FileState对象，而是通过引用计数的方式实现资源的自动释放
 class FileState {
  public:
   // FileStates are reference counted. The initial reference count is zero
@@ -27,6 +29,7 @@ class FileState {
   FileState() : refs_(0), size_(0) {}
 
   // No copying allowed.
+  // 不允许拷贝，因此禁止拷贝构造函数和赋值操作符
   FileState(const FileState&) = delete;
   FileState& operator=(const FileState&) = delete;
 
@@ -68,12 +71,14 @@ class FileState {
     size_ = 0;
   }
 
+  // 从文件对象的offset位置开始读取n个字节到result中，result一般指向scratch缓冲区
   Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const {
     MutexLock lock(&blocks_mutex_);
     if (offset > size_) {
       return Status::IOError("Offset greater than file size.");
     }
     const uint64_t available = size_ - offset;
+    // offset处正好是文件末尾，返回空Slice
     if (n > available) {
       n = static_cast<size_t>(available);
     }
@@ -83,11 +88,12 @@ class FileState {
     }
 
     assert(offset / kBlockSize <= std::numeric_limits<size_t>::max());
-    size_t block = static_cast<size_t>(offset / kBlockSize);
-    size_t block_offset = offset % kBlockSize;
-    size_t bytes_to_copy = n;
+    size_t block = static_cast<size_t>(offset / kBlockSize); // block是offset所在的block的索引
+    size_t block_offset = offset % kBlockSize; // block_offset是offset在block中的偏移量
+    size_t bytes_to_copy = n; // bytes_to_copy是需要拷贝的字节数
     char* dst = scratch;
 
+    // 将blocks_[block]中从block_offset开始，拷贝bytes_to_copy个字节到dst中
     while (bytes_to_copy > 0) {
       size_t avail = kBlockSize - block_offset;
       if (avail > bytes_to_copy) {
@@ -101,19 +107,22 @@ class FileState {
       block_offset = 0;
     }
 
+    // 构造一个Slice对象，指向scratch缓冲区中的数据
     *result = Slice(scratch, n);
     return Status::OK();
   }
 
+  // 将data追加到文件对象的末尾
   Status Append(const Slice& data) {
-    const char* src = data.data();
-    size_t src_len = data.size();
+    const char* src = data.data(); // src指向data的数据
+    size_t src_len = data.size(); // src_len是data的长度
 
     MutexLock lock(&blocks_mutex_);
     while (src_len > 0) {
       size_t avail;
       size_t offset = size_ % kBlockSize;
 
+      // 检查最后一个block是否有剩余空间，如果有，avail为剩余空间大小，否则新建一个block
       if (offset != 0) {
         // There is some room in the last block.
         avail = kBlockSize - offset;
@@ -126,6 +135,7 @@ class FileState {
       if (avail > src_len) {
         avail = src_len;
       }
+      // 将src中的avail个字节拷贝到blocks_的最后一个block中，并更新相关变量
       std::memcpy(blocks_.back() + offset, src, avail);
       src_len -= avail;
       src += avail;
@@ -136,7 +146,7 @@ class FileState {
   }
 
  private:
-  enum { kBlockSize = 8 * 1024 };
+  enum { kBlockSize = 8 * 1024 }; // 每个block的大小，对应于下面的blocks_数组中的每个元素
 
   // Private since only Unref() should be used to delete it.
   ~FileState() { Truncate(); }
@@ -145,8 +155,8 @@ class FileState {
   int refs_ GUARDED_BY(refs_mutex_);
 
   mutable port::Mutex blocks_mutex_;
-  std::vector<char*> blocks_ GUARDED_BY(blocks_mutex_);
-  uint64_t size_ GUARDED_BY(blocks_mutex_);
+  std::vector<char*> blocks_ GUARDED_BY(blocks_mutex_); // blocks_是一个char*数组，每个元素指向一个block
+  uint64_t size_ GUARDED_BY(blocks_mutex_); // size_是文件的总大小
 };
 
 class SequentialFileImpl : public SequentialFile {
@@ -218,6 +228,8 @@ class NoOpLogger : public Logger {
   void Logv(const char* format, std::va_list ap) override {}
 };
 
+// 基于EnvWrapper的派生类，很容易实现一个在某一个Env派生类的基础上改写其中一部分接口的需求
+// InMemoryEnv主要override了和文件操作相关的接口
 class InMemoryEnv : public EnvWrapper {
  public:
   explicit InMemoryEnv(Env* base_env) : EnvWrapper(base_env) {}

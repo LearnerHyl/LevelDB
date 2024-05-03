@@ -234,15 +234,22 @@ class LEVELDB_EXPORT SequentialFile {
   // May set "*result" to point at data in "scratch[0..n-1]", so
   // "scratch[0..n-1]" must be live when "*result" is used.
   // If an error was encountered, returns a non-OK status.
+  // 从文件中读取最多n个字节。scratch[0..n-1]可能会被这个例程写入。
+  // 将“*result”设置为已读取的数据（包括成功读取的字节数少于“n”字节的情况）。
+  // 可能会将“*result”设置为指向“scratch[0..n-1]”中的数据，因此在使用“*result”时，“scratch[0..n-1]”必须处于活动状态。
+  // 如果遇到错误，则返回非OK状态。
   //
   // REQUIRES: External synchronization
+  // 需要外部同步，因为Read操作不是线程安全的
   virtual Status Read(size_t n, Slice* result, char* scratch) = 0;
 
   // Skip "n" bytes from the file. This is guaranteed to be no
   // slower that reading the same data, but may be faster.
+  // 从文件中跳过“n”个字节。这保证不会比读取相同的数据慢，但可能更快。
   //
   // If end of file is reached, skipping will stop at the end of the
   // file, and Skip will return OK.
+  // 如果到达文件末尾，跳过将停在文件末尾，并且Skip将返回OK。
   //
   // REQUIRES: External synchronization
   virtual Status Skip(uint64_t n) = 0;
@@ -332,6 +339,7 @@ LEVELDB_EXPORT Status ReadFileToString(Env* env, const std::string& fname,
 // An implementation of Env that forwards all calls to another Env.
 // May be useful to clients who wish to override just part of the
 // functionality of another Env.
+// Env的实现，将所有调用转发到另一个Env。对于希望仅覆盖另一个Env的部分功能的客户端可能有用。
 class LEVELDB_EXPORT EnvWrapper : public Env {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t.
