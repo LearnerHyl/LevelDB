@@ -224,3 +224,73 @@ LevelDB定长编码采用小端存储，定长编码与解码的方式都很直�
 
 ## 内存管理-Arena内存池
 
+## Arena内存池基本思想
+
+频繁使用new和malloc申请内存本身就是一种资源的浪费，因此Arena内存池预先申请一大块内存（block_内部是连续的，但是blocks元素之间不必连续，block是Arena的单位），之后自行管理这块内存，用户可以任意操作这段内存。比如说对于任务A，A在Arena内存池中申请了一块内存，当任务结束后，再把这块内存空间还给Arena。
+
+这种方法显著的减少了手动调用new和malloc的次数，LevelDB事先申请好一块大内存，之后就完全具备了这块内存的管理权。具体源码在util文件夹下的arena.h和arena.cc中。同时也支持对其和非对其方式的内存分配。
+
+<u>Arena内存池主要用于MemTable的读写。</u>
+
+### 优化1：位运算替代乘除
+
+计算机进行乘除或求模运算的速度远慢于位操作运算，这是由计算机的硬件特性决定的，在性能敏感的系统中可以考虑使用这种优化。因此可以看到Arena类中大多采用位运算。
+
+以下是将乘法、除法和取余运算转换为位运算的示例C++模板：
+
+```cpp
+#include <iostream>
+
+template<typename T>
+T multiplyByPowerOfTwo(T num, int power) {
+    return num << power; // 相当于 num * (2^power)
+}
+
+template<typename T>
+T divideByPowerOfTwo(T num, int power) {
+    return num >> power; // 相当于 num / (2^power)
+}
+
+template<typename T>
+T moduloByPowerOfTwo(T num, int power) {
+    return num & ((1 << power) - 1); // 相当于 num % (2^power)
+}
+
+int main() {
+    int num = 16; // 示例数值
+    int power = 2; // 示例的幂次
+
+    std::cout << "原始数值: " << num << std::endl;
+    std::cout << "乘以 2^" << power << ": " << multiplyByPowerOfTwo(num, power) << std::endl;
+    std::cout << "除以 2^" << power << ": " << divideByPowerOfTwo(num, power) << std::endl;
+    std::cout << "取余 2^" << power << ": " << moduloByPowerOfTwo(num, power) << std::endl;
+
+    return 0;
+}
+```
+
+这个模板实现了三个函数：
+
+- `multiplyByPowerOfTwo` 将一个数乘以 2 的幂次。
+- `divideByPowerOfTwo` 将一个数除以 2 的幂次。
+- `moduloByPowerOfTwo` 对一个数取模 2 的幂次。
+
+这些函数通过位移运算和位与运算实现了对应的数学运算。
+
+### 优化2：无锁的线程同步
+
+Memory_usage_变量统计了Arena内存池当前已经申请的内存总量大小。这里使用了AtomicPointer实现无锁的线程同步，节省了一定的开销。
+
+## 非内存池的内存分配优化-TCMalloc
+
+LevelDB中总有一些需要自己调用new或者malloc方法申请堆内存的场景，LevelDB使用TCMalloc（`Thread-Caching Malloc`）进行优化，TCMalloc是谷歌开发的一种高效的内存分配器，专为多线程应用程序而设计。LevelDB与TCMalloc的结合可以提高其性能和并发性。
+
+TCMalloc相比于标准的内存分配器，如libc中的malloc，有一些优势：
+
+1. **多线程性能**：TCMalloc在多线程环境下的性能更好，它使用了一些技术来减少锁竞争和内存分配的争用，从而提高了多线程应用程序的性能。
+2. **内存利用率**：TCMalloc在内存利用率方面通常更好，可以降低内存碎片化，减少内存浪费。
+3. **更快的分配和释放速度**：TCMalloc通常比标准的内存分配器更快，因为它使用了一些优化技术来提高分配和释放的速度。
+
+LevelDB选择使用TCMalloc作为其默认的内存分配器，是为了提高其性能和并发性。通过使用TCMalloc，LevelDB可以更好地处理大量的内存分配请求，并在多线程环境下获得更好的性能表现。
+
+默认C/C++在编译器中主要采用glibc的内存分配器ptmalloc2。对于同样的操作而言，TCMalloc比ptmalloc2更有优势，并且使用的时候不需要修改任何源码，只需要在编译过程中链接TCMalloc的动态链接库即可。具体过程可以看LevelDB的Makefile。
