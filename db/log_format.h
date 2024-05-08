@@ -13,13 +13,18 @@ namespace log {
 
 enum RecordType {
   // Zero is reserved for preallocated files
+  // 0 是为预分配的文件保留的
   kZeroType = 0,
 
+  // 表示整个记录都在一个 block 中
   kFullType = 1,
 
+  // 下述字段说明当前record跨多个block存在
   // For fragments
-  kFirstType = 2,
+  kFirstType = 2, // 表示该记录的第一个分片
+  // 表示该记录的中间部分分片，注意一个record可能有多个类型为kMiddleType的分片，也可能没有类型为kMiddleType的分片
   kMiddleType = 3,
+  // 表示该记录的最后一个分片
   kLastType = 4
 };
 static const int kMaxRecordType = kLastType;

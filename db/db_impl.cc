@@ -297,18 +297,20 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
   // 忽略CreateDir的错误，因为只有在创建descriptor时才会提交DB的创建，而且这个目录可能已经存在于之前的创建尝试失败中。
+  // 创建数据库目录，若目录已存在则忽略错误
   env_->CreateDir(dbname_);
   assert(db_lock_ == nullptr);
+  // 互斥锁，用于保护数据库文件
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
   if (!s.ok()) {
     return s;
   }
 
-  if (!env_->FileExists(CurrentFileName(dbname_))) { // 若当前目录下不存在名为dbname_的文件
+  if (!env_->FileExists(CurrentFileName(dbname_))) { // 若当前目录下不存在CURRENT文件，则说明数据库不存在
     if (options_.create_if_missing) {
       Log(options_.info_log, "Creating DB %s since it was missing.",
           dbname_.c_str());
-      s = NewDB();
+      s = NewDB(); // 新建数据库
       if (!s.ok()) {
         return s;
       }
@@ -323,6 +325,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     }
   }
 
+  // 读取当前最新版本的MANIFEST文件，进行元数据恢复
   s = versions_->Recover(save_manifest);
   if (!s.ok()) {
     return s;
@@ -333,14 +336,17 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // descriptor (new log files may have been added by the previous
   // incarnation without registering them in the descriptor).
   // 只从比descriptor中命名的log文件更新的log文件中恢复（新的log文件可能已经被之前的版本添加，但没有在descriptor中注册）。
+  // 从上一次的崩溃后最新的MANIFEST文件中读取的log文件编号，我们只会从比这个编号大的log文件中恢复。
+  // 因为比这个编号小的log文件已经成功的以SSTable文件的形式写入到磁盘中了，意味着编号小的log文件已经被成功的应用到了数据库中。
   //
   // Note that PrevLogNumber() is no longer used, but we pay
   // attention to it in case we are recovering a database
   // produced by an older version of leveldb.
   // 注意，PrevLogNumber()不再使用，但是我们在恢复由旧版本的leveldb生成的数据库时会注意到它。
   const uint64_t min_log = versions_->LogNumber();
-  const uint64_t prev_log = versions_->PrevLogNumber();
+  const uint64_t prev_log = versions_->PrevLogNumber(); // 用于记录上一次的崩溃后最新的MANIFEST文件中读取的log文件编号
   std::vector<std::string> filenames;
+  // 获取数据库目录下的所有文件名
   s = env_->GetChildren(dbname_, &filenames);
   if (!s.ok()) {
     return s;
@@ -350,6 +356,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   uint64_t number;
   FileType type;
   std::vector<uint64_t> logs;
+  // 遍历数据库目录下的所有文件名，只留下版本号大于等于最新MANIFEST文件中记录的log文件编号的log文件
   for (size_t i = 0; i < filenames.size(); i++) {
     if (ParseFileName(filenames[i], &number, &type)) {
       expected.erase(number);
@@ -357,6 +364,8 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
         logs.push_back(number);
     }
   }
+  // 遍历完一遍后，expected中剩下的文件编号是在MANIFEST文件中记录的，但是在数据库目录下没有找到的文件编号
+  // 说明这些文件可能丢失了或者损坏了，需要报错
   if (!expected.empty()) {
     char buf[50];
     std::snprintf(buf, sizeof(buf), "%d missing files; e.g.",
@@ -365,6 +374,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   }
 
   // Recover in the order in which the logs were generated
+  // 按照生成log的顺序进行恢复
   std::sort(logs.begin(), logs.end());
   for (size_t i = 0; i < logs.size(); i++) {
     s = RecoverLogFile(logs[i], (i == logs.size() - 1), save_manifest, edit,
@@ -406,8 +416,10 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   mutex_.AssertHeld();
 
   // Open the log file
+  // 日志文件的命名规则为dbname_log_number.log
   std::string fname = LogFileName(dbname_, log_number);
   SequentialFile* file;
+  // 尝试打开日志文件
   Status status = env_->NewSequentialFile(fname, &file);
   if (!status.ok()) {
     MaybeIgnoreError(&status);
@@ -424,48 +436,63 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   // paranoid_checks==false so that corruptions cause entire commits
   // to be skipped instead of propagating bad information (like overly
   // large sequence numbers).
+  // 我们故意让log::Reader进行校验，即使paranoid_checks==false;这样即使出现损坏，也会跳过整个提交，而不是传播错误信息（如过大的序列号）。
   log::Reader reader(file, &reporter, true /*checksum*/, 0 /*initial_offset*/);
   Log(options_.info_log, "Recovering log #%llu",
       (unsigned long long)log_number);
 
   // Read all the records and add to a memtable
+  // 读取所有记录并添加到memtable中
   std::string scratch;
   Slice record;
   WriteBatch batch;
-  int compactions = 0;
+  int compactions = 0; // 记录当前Log文件对应的MemTable触发的Compaction次数
+  // 每个Log文件对应一个MemTable
   MemTable* mem = nullptr;
+  // 从Log文件中依次读取log record
   while (reader.ReadRecord(&record, &scratch) && status.ok()) {
+    // 若读取的log record小于12字节，则认为是损坏的，跳过
+    // TODO:为什么是12字节？
+    // 猜测：kheaderSize是7字节，假设content部分只有一个Delete操作，那么最少也要5字节，所以12字节是一个比较合理的值
+    // 因此，如果读取的log record小于12字节，就认为是损坏的，跳过
     if (record.size() < 12) {
       reporter.Corruption(record.size(),
                           Status::Corruption("log record too small"));
       continue;
     }
+    // 从log record中解析出对应的WriteBatch对象
     WriteBatchInternal::SetContents(&batch, record);
 
-    if (mem == nullptr) {
+    if (mem == nullptr) { // 按照DB启动时设定的comparator创建一个新的MemTable
       mem = new MemTable(internal_comparator_);
-      mem->Ref();
+      mem->Ref(); // 引用计数+1
     }
+    // 将WriteBatch中的操作插入到MemTable中，遍历并应用WriteBatch中的所有操作
     status = WriteBatchInternal::InsertInto(&batch, mem);
     MaybeIgnoreError(&status);
     if (!status.ok()) {
       break;
     }
+    // 应用完这批操作后，更新当前MemTable的最大操作序列号
+    // 计算当前WriteBatch中的最后一个操作的序列号
     const SequenceNumber last_seq = WriteBatchInternal::Sequence(&batch) +
                                     WriteBatchInternal::Count(&batch) - 1;
     if (last_seq > *max_sequence) {
       *max_sequence = last_seq;
     }
 
+    // 如果MemTable的内存使用量超过了设定的阈值，会触发MemTable的Compaction操作，将MemTable转化为SSTable
+    // TODO:后面会专门分析这块代码
     if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) {
       compactions++;
       *save_manifest = true;
       status = WriteLevel0Table(mem, edit, nullptr);
       mem->Unref();
       mem = nullptr;
-      if (!status.ok()) {
+      if (!status.ok()) { // 若Compaction操作失败，则直接返回
         // Reflect errors immediately so that conditions like full
         // file-systems cause the DB::Open() to fail.
+        // 立即反映错误，以便像文件系统已满这样的条件导致DB::Open()失败。
         break;
       }
     }
@@ -474,20 +501,25 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   delete file;
 
   // See if we should keep reusing the last log file.
+  // 检查是否应该继续重用最后一个log文件。
   if (status.ok() && options_.reuse_logs && last_log && compactions == 0) {
     assert(logfile_ == nullptr);
     assert(log_ == nullptr);
     assert(mem_ == nullptr);
     uint64_t lfile_size;
+    // 若名为fname的文件存在且大小不为0，且在该文件后面可以追加写入，则重用该文件
     if (env_->GetFileSize(fname, &lfile_size).ok() &&
         env_->NewAppendableFile(fname, &logfile_).ok()) {
       Log(options_.info_log, "Reusing old log %s \n", fname.c_str());
+      // 将重用的文件的初始大小设置为lfile_size，即在该文件后面可以追加写入
       log_ = new log::Writer(logfile_, lfile_size);
+      // 更新日志文件序号
       logfile_number_ = log_number;
+      // 若当前日志文件的memtable有数据，则将其转移到当前的DBImpl对象中
       if (mem != nullptr) {
         mem_ = mem;
         mem = nullptr;
-      } else {
+      } else { // 若当前日志文件的memtable为空，则创建一个新的memtable
         // mem can be nullptr if lognum exists but was empty.
         mem_ = new MemTable(internal_comparator_);
         mem_->Ref();
@@ -495,8 +527,10 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
     }
   }
 
+  // 若mem不为空，说明并没有重用这次操作使用的log文件
   if (mem != nullptr) {
     // mem did not get reused; compact it.
+    // 做一次Compaction操作，将其持久化为磁盘上的SSTable文件
     if (status.ok()) {
       *save_manifest = true;
       status = WriteLevel0Table(mem, edit, nullptr);
@@ -1255,6 +1289,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
       // 在此期间允许新的写操作被放入writers_队列中，但是不会被执行
       status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
       bool sync_error = false;
+      // 根据WriteOptions中的sync参数来决定是否需要将日志文件实时的刷入到磁盘中(严格来说是磁盘的disk cache中)
       if (status.ok() && options.sync) {
         status = logfile_->Sync();
         if (!status.ok()) {

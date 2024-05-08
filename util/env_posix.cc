@@ -313,12 +313,15 @@ class PosixWritableFile final : public WritableFile {
     }
 
     // Can't fit in buffer, so need to do at least one write.
+    // buffer当前的剩余容量不足以容纳所有的data，因此需要一次FlushBuffer()操作
     Status status = FlushBuffer();
     if (!status.ok()) {
       return status;
     }
 
     // Small writes go to buffer, large writes are written directly.
+    // 小写入写入缓冲区，大写入直接写入
+    // 这里对小写入应用了buffer思想，从而减少系统调用的次数，提高写入效率
     if (write_size < kWritableFileBufferSize) {
       std::memcpy(buf_, write_data, write_size);
       pos_ = write_size;
@@ -361,6 +364,7 @@ class PosixWritableFile final : public WritableFile {
   }
 
  private:
+  // 将buffer中的数据flush到内核缓冲区
   Status FlushBuffer() {
     Status status = WriteUnbuffered(buf_, pos_);
     pos_ = 0;

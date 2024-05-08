@@ -176,6 +176,8 @@ class VersionSet {
   // Apply *edit to the current version to form a new descriptor that
   // is both saved to persistent state and installed as the new
   // current version.  Will release *mu while actually writing to the file.
+  // 应用*edit到当前版本，形成一个新的描述符，该描述符既保存到持久状态，又安装为新的当前版本。
+  // 在实际写入文件时，将释放*mu。
   // REQUIRES: *mu is held on entry.
   // REQUIRES: no other thread concurrently calls LogAndApply()
   Status LogAndApply(VersionEdit* edit, port::Mutex* mu)
@@ -195,6 +197,7 @@ class VersionSet {
 
   // Arrange to reuse "file_number" unless a newer file number has
   // already been allocated.
+  // 除非已经分配了更新的文件号，否则安排重用“file_number”。
   // REQUIRES: "file_number" was returned by a call to NewFileNumber().
   void ReuseFileNumber(uint64_t file_number) {
     if (next_file_number_ == file_number + 1) {
@@ -225,6 +228,7 @@ class VersionSet {
 
   // Return the log file number for the log file that is currently
   // being compacted, or zero if there is no such log file.
+  // 返回当前正在压缩的日志文件的日志文件号，如果没有这样的日志文件，则返回零。
   uint64_t PrevLogNumber() const { return prev_log_number_; }
 
   // Pick level and inputs for a new compaction.
@@ -256,6 +260,7 @@ class VersionSet {
 
   // Add all files listed in any live version to *live.
   // May also mutate some internal state.
+  // 将列在任何活动版本中的所有文件添加到*live。
   void AddLiveFiles(std::set<uint64_t>* live);
 
   // Return the approximate offset in the database of the data for

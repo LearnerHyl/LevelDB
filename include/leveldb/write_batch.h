@@ -11,10 +11,10 @@
 // updates是按照它们被添加到WriteBatch中的顺序应用的。
 // 例如，下面的batch被写入后，"key"的值将是"v3"：
 //
-//    batch.Put("key", "v1");
-//    batch.Delete("key");
-//    batch.Put("key", "v2");
-//    batch.Put("key", "v3");
+//  batch.Put("key", "v1");
+//  batch.Delete("key");
+//  batch.Put("key", "v2");
+//  batch.Put("key", "v3");
 //
 // Multiple threads can invoke const methods on a WriteBatch without
 // external synchronization, but if any of the threads may call a
@@ -36,6 +36,7 @@ namespace leveldb {
 class Slice;
 /**
  * WriteBatch类:相当于一个缓冲区，用于存储一组更新操作，然后将这组更新操作原子地应用到数据库中。
+ * 每个WriteBatch对应一条日志记录，日志记录中存储了一组更新操作。
  * 1. WriteBatch类用于将一组更新原子地应用到数据库中。
  * 2. 更新是按照它们被添加到WriteBatch中的顺序应用的。
  * 3. 这组操作可以是Put操作，也可以是Delete操作。
@@ -87,13 +88,24 @@ class LEVELDB_EXPORT WriteBatch {
   void Append(const WriteBatch& source);
 
   // Support for iterating over the contents of a batch.
-  // 支持遍历batch的内容。
+  // 支持遍历batch的内容。遍历的过程中，将对应的操作应用到Handler中。
   Status Iterate(Handler* handler) const;
 
  private:
   friend class WriteBatchInternal;
 
   std::string rep_;  // See comment in write_batch.cc for the format of rep_
+//
+// WriteBatch::rep_ :=
+//    sequence: fixed64
+//    count: fixed32
+//    data: record[count]
+// record :=
+//    kTypeValue varstring varstring         |
+//    kTypeDeletion varstring
+// varstring :=
+//    len: varint32
+//    data: uint8[len]
 };
 
 }  // namespace leveldb

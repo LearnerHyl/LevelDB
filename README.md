@@ -180,9 +180,13 @@ void AtomicPointer::Release_Store(void* v) {
 
 ## 文件操作
 
+![Linux下各种写操作对比图](doc/imgs/Linux-writes.png)
+
 这里主要关注了LevelDB中使用mmap方法实现的随机读接口：`PosixMmapReadableFile`。mmap方法将文件映射到内存中，然后通过内存访问文件内容，相比于普通的文件读取，mmap()省去了内核空间到用户空间的数据拷贝，提高了文件读取的效率。
 
 还有Posix下的顺序读、随机读的一些接口设计，他们本质上都是封装了Posix提供的读写接口。LevelDB的随机读取实现默认采用mmap的随机读接口。
+
+注意几种写操作的不同，上图很形象的说明了这一点。具体可以看这篇文章[Linux I/O操作fsync后数据就安全了么(fsync、fwrite、fflush、mmap、write barriers详解)-CSDN博客](https://blog.csdn.net/hilaryfrank/article/details/112200420)
 
 ## Env对象
 
@@ -222,7 +226,7 @@ LevelDB定长编码采用小端存储，定长编码与解码的方式都很直�
 
 参考博客[LevelDB：动静结合——编码 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/216143729)
 
-## 内存管理-Arena内存池
+# 内存管理-Arena内存池
 
 ## Arena内存池基本思想
 
@@ -279,7 +283,7 @@ int main() {
 
 ### 优化2：无锁的线程同步
 
-Memory_usage_变量统计了Arena内存池当前已经申请的内存总量大小。这里使用了AtomicPointer实现无锁的线程同步，节省了一定的开销。
+Memory_usage_变量统计了Arena内存池当前已经申请的内存总量大小。这里使用了AtomicPointer实现该变量，从而实现无锁的线程同步，节省了一定的开销。
 
 ## 非内存池的内存分配优化-TCMalloc
 
@@ -294,3 +298,209 @@ TCMalloc相比于标准的内存分配器，如libc中的malloc，有一些优�
 LevelDB选择使用TCMalloc作为其默认的内存分配器，是为了提高其性能和并发性。通过使用TCMalloc，LevelDB可以更好地处理大量的内存分配请求，并在多线程环境下获得更好的性能表现。
 
 默认C/C++在编译器中主要采用glibc的内存分配器ptmalloc2。对于同样的操作而言，TCMalloc比ptmalloc2更有优势，并且使用的时候不需要修改任何源码，只需要在编译过程中链接TCMalloc的动态链接库即可。具体过程可以看LevelDB的Makefile。
+
+# Log-WAL
+
+当向LevelDB写入数据时，只需要将数据写入内存中的MemTable，而内存是易失性存储，因此LevelDB需要一种机制确保写入不会丢失：WAL（预写日志）。WAL是一个Append-Only、顺序写入磁盘的文件。只要WAL成功的被持久化，那么就可以保证这次修改不会丢失。当MemTable中的数据被成功写入SSTable后，对应修改的Log可以被GC。
+
+键值对每次写入时都需要先记录到Log文件中，每个Log文件对应着一个MemTable，因此只有当一个MemTable大小因超出阈值而触发落盘并且成功生成一个SSTable之后，才可以将对应的Log文件删除。当LevelDB启动时会检测是否有没有删除掉的log文件，如果有，则说明该Log文件中对应的MemTable数据并未成功持久化到SSTable，此时需要从该Log文件中恢复MemTable。
+
+## Log Record格式
+
+Log文件以block为基本单位，每一个block大小为32768字节（32KB，默认大小，可以自行设置），一条记录可能全部写到一个block上，也可能跨多个block存在。单条记录的格式如下：
+
+![log record format](doc/imgs/log_record_format.png)
+
+各个字段的说明如下（Record Header部分指的是CRC+len+RecordType，总共7个字节）：
+
+| 字段    | 作用                                                     |
+| ------- | -------------------------------------------------------- |
+| CRC     | 数据校验和                                               |
+| Len     | 有效数据长度，即Record Data部分，不包含Record Header部分 |
+| Type    | 当前Record类型，具体参考下表                             |
+| Content | 写入到.log的数据内容                                     |
+
+Type具体有如下几种类型，在Log_format.h文件中定义：
+
+```c++
+enum RecordType {
+  // Zero is reserved for preallocated files
+  // 0 是为预分配的文件保留的
+  kZeroType = 0,
+
+  // 表示整个记录都在一个 block 中
+  kFullType = 1,
+
+  // 下述字段说明当前record跨多个block存在
+  // For fragments
+  kFirstType = 2, // 表示该记录的第一个分片
+  // 表示该记录的中间部分分片，注意一个record可能有多个中间分片，也可能没有类型为kMiddleType的分片
+  kMiddleType = 3,
+  // 表示该记录的最后一个分片
+  kLastType = 4
+};
+```
+
+根据LevelDB的record存储方式，不难推断出Log文件的读取流程：首先根据头部的Len字段，确定Data部分的长度，之后根据头部类型字段确定该条记录是否已经完整读取，如果是kFirstType或者kMiddleType则继续按照流程进行，直到读取到记录类型为kLastType的记录。
+
+当然kFullType类型的字段可以用一条记录的功夫读取完毕。根据上述的Log Record格式，先给出Log的组织形式：
+
+![log record的组织形式](doc/imgs/log_file_format.png)
+
+## Log文件的写入
+
+log文件写入的相关代码位于log_writer.h和log_writer.cc两个文件中，主要功能在AddRecord函数上。注意头部字段是固定为7B的，而Len长度为2B，这意味着Content字段的最长长度为64KB， 即最长可占满两个Block。
+
+目前我们不讨论Content字段中的内容是如何生成的，Content内容的生成会在下一节生成Log Record中进行详细说明，这里我们主要关注log record是如何在文件中写入并组织的。写入可以分为两种情况：
+
+- 当前block剩余的空闲空间可以容纳这条记录，直接写入并移动指针即可。
+- 假如我们写完一块记录后，还想在写入一个记录，但是发现当前块中剩余空间<=6Byte，而一个Log Record的Header是7Byte。所以不能继续使用该block，此时我们会将该block剩余的空间用\x00依次填充。
+  - 只要一个块的剩余空间<=6Byte，我们都会将剩余位置的字节依次用\x00填充。
+- 若一块写不下，我们按照上述逻辑，继续向下一个block写入有效数据，记住每一个record分片都需要有一个对应的log header。
+
+具体的细节部分可以直接阅读AddRecord函数的代码，该函数详细的说明了LevelDB是如何将一条Record写入并刷新到磁盘文件上去的。在log_writer.cc文件中。
+
+注意LevelDB并不会对每一条record都进行一次write操作，这样过于耗费资源：
+
+1. 对于小的record，LevelDB采用了缓冲思想，等buffer累积了足够的records，即buffer总会在某一刻被records占满，再一次性的Flush到内核缓冲区。
+2. 若某一条record过大，比buffer当前剩余空间要大，那么我们选择先write一部分内容，先将该buffer填满后做一次flush操作，之后若剩下的待写容量仍然要大于缓冲区大小，那么我们会跳过buffer环节，直接进行write操作写入（unbuffered write）。
+
+一定要能区分write、flush、sync等等这些操作的区别，以及这些操作过后文件数据究竟到哪了，数据是否已经真正的安全了，具体请见公用基础类中说明的文件操作一节。
+
+### 当Block中恰好剩余KheaderSize大小
+
+阅读源码后，逻辑似乎是添加一个只有空header的记录，该记录没有任何内容，仅标记下一条记录的开始。
+
+## Log文件读取
+
+log文件的读取代码主要位于db/log_reader.h和db/log_reader.cc两个文件中，主要关注ReadRecord方法。
+
+ReadRecord方法中额外的加入了KEof与KBadRecord两种异常record类型，ReadPhysicalRecord()函数中较为详细的介绍了两种参数的使用场景，具体见log_reader.h中函数的注释。
+
+在读取时，对于跨block的记录，但是漏写了一些分片（比如可能是写完了某一个分片后立即死亡，因此后续的分片无法完成），对于这样的记录我们选择忽略它。但是如果碰到了记录本身的损坏，如CRC校验值对不上、header中的长度与记录实际的长度不符，这种情况就是真的错误了，需要报告给用户。
+
+------
+
+此外，我们需要关注一点的是，Reader中有一个initial_offset的概念，即Reader会总这个位置开始寻找第一条有效的日志记录，此外，源码中有这样一部分内容有点意思：
+
+```c++
+bool Reader::ReadRecord(Slice* record, std::string* scratch) {
+  // 如果上一次读取的记录的偏移量小于该Reader当前规定的初始偏移量
+  // 则跳转到当前的初始块的位置
+  if (last_record_offset_ < initial_offset_) {
+    if (!SkipToInitialBlock()) {
+      return false;
+    }
+  }
+```
+
+上述的意思是，如果我们在读取记录时，发现ReadRecord上次读取的记录的偏移量小于Reader的起始偏移量，那么需要跳转到当前的偏移量。但是有意思的是，经过源码分析，发现skip block这部分没有用，leveldb中所有调用log::Reader构造函数处initail_offset传入的都为0。
+
+经过资料查阅，skip block 这部分确实没用, 因为LevelDB没有这种需求, log文件的读取总是从头读到尾的. 也许是BigTable有这种需求, 而提取代码时遗留了这部分。
+
+此外，rocksDB中已经删除了有关这部分内容的处理，因此不必过多纠结，具体内容可以看这篇博客。[LevelDB源码解析8. 读取日志 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/35188065)
+
+### C++小八股(const char*与char\* const)
+
+`const char*` 和 `char* const` 都是指向字符（char）类型的指针，但它们的含义不同：
+
+1. `const char*`：
+   - 这表示指向字符的指针，其中 `const` 关键字修饰的是指针指向的内容，表示指针所指向的字符是常量，即指针指向的内容不能通过这个指针被修改。
+   - 例如：`const char* str = "Hello";`，这里 `str` 是一个指向常量字符的指针，指向的字符数组 `"Hello"` 中的字符是不可修改的。
+
+2. `char* const`：
+   - 这表示指向字符的常量指针，其中 `const` 关键字修饰的是指针本身，表示指针本身是常量，即指针的指向不能被修改。
+   - 例如：`char* const ptr = some_char_array;`，这里 `ptr` 是一个常量指针，指向某个字符数组，但是指针本身不能修改，即不能将 `ptr` 指向其他位置。
+
+总结起来，`const char*` 表示指向常量字符的指针，而 `char* const` 表示常量指针，两者的区别在于指针的常量性和指向的内容的常量性。
+
+## 生成Log Record(DBImpl::Write)
+
+上面已经记录log record在被写入时的格式，我们注意到了content字段还没有介绍，下面就是具体的介绍content字段中包含的内容，以及content是怎么生成的。之前已经介绍过，LevelDB每次进行写入操作时，都需要调用**AddRecord(Slice& Data)**方法，Data包含的就是Content中的具体内容，并且根据WriteOptions中的参数决定是否要进行实时的刷盘操作(Linux环境下是fsync)。
+
+> 这里再次强调一下fwrite()、fflush()、fsync()三者的不同：
+>
+> 1. fwrite是写到Clib的缓冲区，此时仍然位于用户态。。
+> 2. fflush是将数据刷新到内核的缓冲区，即pagecache，注意write函数也可以将数据刷新到pagecache。即write可以跳过Clib一步直接将数据刷新到pagecache中。
+> 3. fsync可以将数据从pagecache中刷新到磁盘的diskcache中。
+
+这就和之前的DBImpl::Write函数对接上了，LevelDB的写操作中有这么一段代码：
+
+```c++
+Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
+  ......;
+  mutex_.Unlock();
+  // 将写操作记录到日志文件中，并将日志文件刷盘
+  // 在此期间允许新的写操作被放入writers_队列中，但是不会被执行
+  status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
+  bool sync_error = false;
+ // 根据WriteOptions中的sync参数来决定是否需要将日志文件实时的刷入到磁盘中(严格来说是磁盘的disk cache中)
+  if (status.ok() && options.sync) {
+    status = logfile_->Sync();
+    if (!status.ok()) {
+      sync_error = true;
+    }
+  }
+  // 将写操作应用到memtable中
+  if (status.ok()) {
+    status = WriteBatchInternal::InsertInto(write_batch, mem_);
+  }
+  mutex_.Lock();
+  .......;
+}
+```
+
+在DBImpl::Write中，调用AddRecord时传入的参数为WriteBatchInternal::Contents(write_batch)，WreiteBatchInternal是负责操作WriteBatch的静态方法。在具体介绍WriteBatch和WriteBatchInternal之前，先说明调用log_->AddRecord()后最终插入到Log文件中的log record中的Content中的内容格式，这部分对于后续理解很重要：
+![Content字段格式](doc/imgs/WriteBatch-format.png)
+
+对上述字段中的内容列出表格如下：
+
+| 字段名称                     | 作用                                                         |
+| ---------------------------- | ------------------------------------------------------------ |
+| seqNum(全名为sequenceNumber) | 占8个字节，表示这个WriteBatch的序列号，全局唯一              |
+| count                        | 占4个字节，表示这个WriteBatch中包含了多少个操作（包含了多少个键值对）。上图方框圈中包含的字段就是一个操作，操作类型只能是Put或者Delete，个数由count值维护。 |
+| Type                         | 代表一个操作的类型，Put或者Delete                            |
+
+剩下的字段不再介绍，根据名称很容易推理出来用途，有了这个前置知识，可以继续了解WriteBatch类型。
+
+### WriteBatch和WriteBatchInternal
+
+在LevelDB中，WriteBatch持有一组更新，即一个WriteBatch中包含了一系列的Put/Delete操作，这组更新必须**原子的**应用到一个DB上。并且这些操作按照他们被添加到WriteBatch中的顺序应用的。例如：
+
+```c++
+// key最终的值是v3
+batch.Put("key", "v1");
+batch.Delete("key");
+batch.Put("key", "v2");
+batch.Put("key", "v3");
+```
+
+此外，多个线程可以在不需要外部同步的情况下调用WriteBatch的const方法，但是如果任何一个线程可能调用一个非const方法，所有访问相同WriteBatch的线程都必须使用外部同步。
+
+有了以上的基础知识，不难理解WriteBatch的一些常规操作了，如Put、Delete操作，这些本质上都是按照上述的操作格式，依次将对应字节处的值，经过变长编码后依次追加存储。读取的时候要解码。
+
+### Manifest操作场景(这里是简单介绍)
+
+除了DBImpl::write()需要调用AddRecord函数添加日志，Manifest相关操作也需要调用AddRecord。在LevelDB中，Manifest文件保存了整个LevelDB实例的元数据，比如每一层有哪些 SSTable、比较器名称、日志文件序号、当前最大序列号、每一层包含的文件信息等等，这些信息同样需要记录并刷新到磁盘，以便LevelDB恢复或重启的时候能够重建元数据。
+
+格式上，我们可以把Manifest文件看做一个Log文件，一个log record就是一个versionEdit。这里先简单介绍，具体的Version格式到后面阅读源代码时再详细记录。
+
+![versionEdit](doc/imgs/versionEditChange.png)
+
+这里我们只需要简单地了解，VersionSet::LogAndApply内部有log_->AddRecord()的逻辑，LogAndApply负责应用edit到当前版本，从而形成一个新的版本，内部的AddRecord操作负责将新生成的versionN+1作为content内容，将其封装为一个log record，从而持久化此次变更，这里的操作思想与上面介绍的log文件写入是一致的。
+
+## 从Log文件恢复MemTable-崩溃恢复
+
+当打开一个LevelDB数据文件时，需要检验是否需要进行崩溃恢复，即是否有Log文件存在，若存在意味着这部分Log并没有成功的以SSTable的形式落盘，因此首先需要从该Log文件中生成一个MemTable，主要的逻辑在db/db_impl.cc的RecoverLogFile函数中。
+
+从函数调用的层面阐述上述过程：当我们调用DB::Open()打开一个数据库对象时，首先总是会尝试恢复之前已经持久化的数据-DBimpl::Recover，之后根据上一次崩溃恢复已经持久化的最新Version文件中的版本信息，只选择比该文件版本信息更新的Log文件中进行恢复。之后对每个需要解析的文件调用DBImpl::RecoverLogFile，LevelDB会为每个LogFile创建一个MemTable。
+
+具体函数内容可见DBImpl::RecoverLogFile()。在解析Log Record进行崩溃恢复的过程中，对于长度小于12字节的record系统会认为该记录是无效的从而自动跳过。
+
+> 猜测：kheaderSize是7字节，假设content部分只有一个Delete操作，那么最少也要5字节，所以12字节是一个比较合理的值。因此，如果读取的log record小于12字节，就认为是损坏的，跳过该记录。
+
+LevelDB会提取出每一条LogRecord中的操作序列，之后将其插入到MemTable中，遍历并应用这些操作序列。如果MemTable的内存使用量超过了设定的阈值，会触发MemTable的Compaction操作，将MemTable转化为SSTable。
+
+此外，LevelDB还提供了重用最后一个未经过compaction操作的LogFile的机制。详细逻辑要查看具体函数。
+
+# MemTable模块

@@ -18,6 +18,7 @@ void PutFixed64(std::string* dst, uint64_t value) {
   dst->append(buf, sizeof(buf));
 }
 
+// 将v值用变长编码方式存储到dst中，返回值是dst的尾部指针
 char* EncodeVarint32(char* dst, uint32_t v) {
   // Operate on characters as unsigneds
   uint8_t* ptr = reinterpret_cast<uint8_t*>(dst);
@@ -46,9 +47,12 @@ char* EncodeVarint32(char* dst, uint32_t v) {
   return reinterpret_cast<char*>(ptr);
 }
 
+// 将v值用变长编码方式存储到dst中
 void PutVarint32(std::string* dst, uint32_t v) {
   char buf[5];
+  // 获取v的变长编码，存储到buf中，最终返回的的是buf的尾部指针
   char* ptr = EncodeVarint32(buf, v);
+  // 将v的变长编码追加到dst中
   dst->append(buf, ptr - buf);
 }
 
@@ -69,6 +73,7 @@ void PutVarint64(std::string* dst, uint64_t v) {
   dst->append(buf, ptr - buf);
 }
 
+// 将value的长度值进行变长编码后追加到dst中，然后将value的内容追加到dst中
 void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
   PutVarint32(dst, value.size());
   dst->append(value.data(), value.size());

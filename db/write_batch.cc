@@ -81,29 +81,37 @@ Status WriteBatch::Iterate(Handler* handler) const {
 }
 
 int WriteBatchInternal::Count(const WriteBatch* b) {
+  // 8是因为序列号占8个字节，所以计数的起始位置是8
   return DecodeFixed32(b->rep_.data() + 8);
 }
 
 void WriteBatchInternal::SetCount(WriteBatch* b, int n) {
+  // 不难理解，这里的8是因为序列号占8个字节，所以计数的起始位置是8
   EncodeFixed32(&b->rep_[8], n);
 }
 
 SequenceNumber WriteBatchInternal::Sequence(const WriteBatch* b) {
+  // 序列号占8个字节，所以直接取前8个字节即可
   return SequenceNumber(DecodeFixed64(b->rep_.data()));
 }
 
 void WriteBatchInternal::SetSequence(WriteBatch* b, SequenceNumber seq) {
+  // 序列号占8个字节，所以直接取前8个字节即可
   EncodeFixed64(&b->rep_[0], seq);
 }
 
 void WriteBatch::Put(const Slice& key, const Slice& value) {
+  // 更新计数
   WriteBatchInternal::SetCount(this, WriteBatchInternal::Count(this) + 1);
+  // 添加kTypeValue标记
   rep_.push_back(static_cast<char>(kTypeValue));
+  // 添加key_length和key
   PutLengthPrefixedSlice(&rep_, key);
+  // 添加value_length和value
   PutLengthPrefixedSlice(&rep_, value);
 }
 
-void WriteBatch::Delete(const Slice& key) {
+void WriteBatch::Delete(const Slice& key) { // 参考Put函数
   WriteBatchInternal::SetCount(this, WriteBatchInternal::Count(this) + 1);
   rep_.push_back(static_cast<char>(kTypeDeletion));
   PutLengthPrefixedSlice(&rep_, key);
