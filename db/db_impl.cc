@@ -546,8 +546,10 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   mutex_.AssertHeld();
   const uint64_t start_micros = env_->NowMicros();
   FileMetaData meta;
+  // 每个MemTable对应一个SSTable文件，生成一个新的SSTable文件序号
   meta.number = versions_->NewFileNumber();
   pending_outputs_.insert(meta.number);
+  // 生成当前memtable的迭代器，本质上是调用底层的SkipList的迭代器
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
@@ -555,6 +557,8 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
+    // 将memtable中的数据写入到SSTable文件中
+    // I/O操作开始后，就释放锁，允许其他线程继续操作
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }

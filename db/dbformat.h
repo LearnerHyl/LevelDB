@@ -51,6 +51,8 @@ class InternalKey;
 // Value types encoded as the last component of internal keys.
 // DO NOT CHANGE THESE ENUM VALUES: they are embedded in the on-disk
 // data structures.
+// 值类型编码为内部键的最后一个组件。
+// 不要更改这些枚举值：它们嵌入在磁盘上的数据结构中。
 enum ValueType { kTypeDeletion = 0x0, kTypeValue = 0x1 };
 // kValueTypeForSeek defines the ValueType that should be passed when
 // constructing a ParsedInternalKey object for seeking to a particular
@@ -58,6 +60,9 @@ enum ValueType { kTypeDeletion = 0x0, kTypeValue = 0x1 };
 // and the value type is embedded as the low 8 bits in the sequence
 // number in internal keys, we need to use the highest-numbered
 // ValueType, not the lowest).
+// kValueTypeForSeek定义了在构造用于寻找特定序列号的ParsedInternalKey对象时应传递的ValueType
+// （因为我们按降序对序列号进行排序，并且值类型嵌入在内部键中的序列号的低8位中，
+// 我们需要使用最高编号的ValueType，而不是最低编号的ValueType）。
 static const ValueType kValueTypeForSeek = kTypeValue;
 
 typedef uint64_t SequenceNumber;
@@ -186,10 +191,13 @@ inline bool ParseInternalKey(const Slice& internal_key,
 }
 
 // A helper class useful for DBImpl::Get()
+// 一个有用的辅助类，用于DBImpl::Get()
+// LookUpKey: key本身长度(注意不包括tag)+key本身数据+tag(sequence number)
 class LookupKey {
  public:
   // Initialize *this for looking up user_key at a snapshot with
   // the specified sequence number.
+  // 为查找具有指定序列号的快照中的user_key初始化*this。
   LookupKey(const Slice& user_key, SequenceNumber sequence);
 
   LookupKey(const LookupKey&) = delete;
@@ -198,12 +206,15 @@ class LookupKey {
   ~LookupKey();
 
   // Return a key suitable for lookup in a MemTable.
+  // 返回一个适合在MemTable中查找的key。返回的是key_len(注意不包括tag)+userkey+tag
   Slice memtable_key() const { return Slice(start_, end_ - start_); }
 
   // Return an internal key (suitable for passing to an internal iterator)
+  // 返回一个内部键（适合传递给内部迭代器）。返回的是userkey+tag，没有key_len
   Slice internal_key() const { return Slice(kstart_, end_ - kstart_); }
 
   // Return the user key
+  // 只返回userkey
   Slice user_key() const { return Slice(kstart_, end_ - kstart_ - 8); }
 
  private:
@@ -214,6 +225,8 @@ class LookupKey {
   //                                    <-- end_
   // The array is a suitable MemTable key.
   // The suffix starting with "userkey" can be used as an InternalKey.
+  // 这个数组是一个合适的MemTable key。
+  // 以"userkey"开头的后缀可以用作InternalKey。
   const char* start_;
   const char* kstart_;
   const char* end_;

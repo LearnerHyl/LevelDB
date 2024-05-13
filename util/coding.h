@@ -38,6 +38,8 @@ bool GetLengthPrefixedSlice(Slice* input, Slice* result);
 // in *v and return a pointer just past the parsed value, or return
 // nullptr on error.  These routines only look at bytes in the range
 // [p..limit-1]
+// 基于指针的GetVarint...变体。这些例程将值存储在*v中，并返回刚刚解析的值的指针，或在错误时返回nullptr。
+// 注意：这些例程只查看[p..limit-1]范围内的字节
 const char* GetVarint32Ptr(const char* p, const char* limit, uint32_t* v);
 const char* GetVarint64Ptr(const char* p, const char* limit, uint64_t* v);
 
@@ -109,15 +111,15 @@ inline uint64_t DecodeFixed64(const char* ptr) {
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value);
 // 32位变长数据的解码
-// 当值小于limit时，使用该函数进行解码，否则使用GetVarint32PtrFallback
 inline const char* GetVarint32Ptr(const char* p, const char* limit,
                                   uint32_t* value) {
   if (p < limit) {
+    // 从p中读取当前字节地址中的数据,即相当于p[0]
     uint32_t result = *(reinterpret_cast<const uint8_t*>(p));
-    // 若最高位为0，则说明后面没有数据了
+    // 若最高位为0，则说明后面没有数据了，一个byte就可以存储value
     if ((result & 128) == 0) {
       *value = result;
-      // 返回下一个字节的位置
+      // 返回下一个字节的地址
       return p + 1;
     }
   }

@@ -499,8 +499,8 @@ batch.Put("key", "v3");
 
 > 猜测：kheaderSize是7字节，假设content部分只有一个Delete操作，那么最少也要5字节，所以12字节是一个比较合理的值。因此，如果读取的log record小于12字节，就认为是损坏的，跳过该记录。
 
-LevelDB会提取出每一条LogRecord中的操作序列，之后将其插入到MemTable中，遍历并应用这些操作序列。如果MemTable的内存使用量超过了设定的阈值，会触发MemTable的Compaction操作，将MemTable转化为SSTable。
+LevelDB会提取出每一条LogRecord中的操作序列，之后将其插入到MemTable中，在MemTable中遍历并应用这些操作序列。如果MemTable的内存使用量超过了设定的阈值，会触发MemTable的Compaction操作，将MemTable转化为SSTable。
 
 此外，LevelDB还提供了重用最后一个未经过compaction操作的LogFile的机制。详细逻辑要查看具体函数。
 
-# MemTable模块
+第二部分-[LSM相关模块介绍](./README2.md)
