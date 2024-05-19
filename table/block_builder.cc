@@ -3,6 +3,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 //
 // BlockBuilder generates blocks where keys are prefix-compressed:
+// BlockBuilder生成的块，其中键是前缀压缩的：
 //
 // When we store a key, we drop the prefix shared with the previous
 // string.  This helps reduce the space requirement significantly.
@@ -12,8 +13,13 @@
 // restart points, and can be used to do a binary search when looking
 // for a particular key.  Values are stored as-is (without compression)
 // immediately following the corresponding key.
+// 当我们存储一个键时，我们会丢弃与前一个字符串共享的前缀。这有助于显著减少空间需求。
+// 此外，每隔K个键，我们不应用前缀压缩，而是存储整个键。我们称之为“重启点”。
+// 块的尾部存储了所有重启点的偏移量，并且可以在查找特定键时使用二分搜索。
+// 值按原样存储(不压缩)，紧随相应的键之后。
 //
 // An entry for a particular key-value pair has the form:
+// 特定键值对的条目的格式如下：
 //     shared_bytes: varint32
 //     unshared_bytes: varint32
 //     value_length: varint32
@@ -22,6 +28,7 @@
 // shared_bytes == 0 for restart points.
 //
 // The trailer of the block has the form:
+// 块的尾部的格式如下：
 //     restarts: uint32[num_restarts]
 //     num_restarts: uint32
 // restarts[i] contains the offset within the block of the ith restart point.

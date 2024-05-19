@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "leveldb/comparator.h"
+
 #include "table/format.h"
 #include "util/coding.h"
 #include "util/logging.h"
@@ -19,6 +20,7 @@ namespace leveldb {
 
 inline uint32_t Block::NumRestarts() const {
   assert(size_ >= sizeof(uint32_t));
+  // 根据DataBlock的布局，重启点的数量存储在DataBlock的最后4个字节
   return DecodeFixed32(data_ + size_ - sizeof(uint32_t));
 }
 
@@ -26,21 +28,25 @@ Block::Block(const BlockContents& contents)
     : data_(contents.data.data()),
       size_(contents.data.size()),
       owned_(contents.heap_allocated) {
-  if (size_ < sizeof(uint32_t)) {
-    size_ = 0;  // Error marker
+  if (size_ < sizeof(uint32_t)) {  // Block的大小小于4字节，数据不合法
+    size_ = 0;                     // Error marker
   } else {
+    // 一个RestartPoint占用4个字节，需要为RestartPointsNum预留4个字节
+    // 因此重启点的数量最多为(size_ - 4) / 4
     size_t max_restarts_allowed = (size_ - sizeof(uint32_t)) / sizeof(uint32_t);
-    if (NumRestarts() > max_restarts_allowed) {
+    if (NumRestarts() >
+        max_restarts_allowed) {  // 重启点的数量超过了最大允许值，不合法
       // The size is too small for NumRestarts()
       size_ = 0;
-    } else {
+    } else {  // 重启点的数量合法
+      // 根据DataBlock的布局，可以计算出restart_offset_的值
       restart_offset_ = size_ - (1 + NumRestarts()) * sizeof(uint32_t);
     }
   }
 }
 
 Block::~Block() {
-  if (owned_) {
+  if (owned_) {  // 若是Block拥有data_的内存，则需要在析构时释放data_的内存
     delete[] data_;
   }
 }
@@ -49,42 +55,70 @@ Block::~Block() {
 // storing the number of shared key bytes, non_shared key bytes,
 // and the length of the value in "*shared", "*non_shared", and
 // "*value_length", respectively.  Will not dereference past "limit".
+// 解码从p开始的下一个block entry(即kv entry)，我们已经知道了一个kv
+// entry的格式如下: | shared_bytes | non_shared_bytes | value_length |
+// key_delta-char[non_shared_bytes] | value-char[value_length] |
+// 该函数解码出shared_bytes, non_shared_bytes,
+// value_length，并将其存储在*shared, *non_shared, *value_length中。
+// 解码的区间为[p, limit)
 //
 // If any errors are detected, returns nullptr.  Otherwise, returns a
 // pointer to the key delta (just past the three decoded values).
+// 如果解码过程中出现错误，则返回nullptr。否则，返回指向key
+// delta的指针(即指向key的指针)
 static inline const char* DecodeEntry(const char* p, const char* limit,
                                       uint32_t* shared, uint32_t* non_shared,
                                       uint32_t* value_length) {
+  // 因为shared, non_shared, value_length用varint32编码，因此总共最少需要3个字节
   if (limit - p < 3) return nullptr;
   *shared = reinterpret_cast<const uint8_t*>(p)[0];
   *non_shared = reinterpret_cast<const uint8_t*>(p)[1];
   *value_length = reinterpret_cast<const uint8_t*>(p)[2];
+  // 根据变长编码的规则，如果第一个字节的最高位为1，则表示后面还有数据
   if ((*shared | *non_shared | *value_length) < 128) {
     // Fast path: all three values are encoded in one byte each
+    // 说明三个值都是一个字节编码的，解码成功，p+3即为key delta的起始位置
     p += 3;
-  } else {
+  } else {  // 否则依次用varint32的方式解码shared, non_shared, value_length
     if ((p = GetVarint32Ptr(p, limit, shared)) == nullptr) return nullptr;
     if ((p = GetVarint32Ptr(p, limit, non_shared)) == nullptr) return nullptr;
     if ((p = GetVarint32Ptr(p, limit, value_length)) == nullptr) return nullptr;
   }
 
+  // 此时p指向key
+  // delta的起始位置，key_delta和value的实际字节的长度和不应该小于解码出的长度和
+  // limit - p为key delta和value的实际字节的长度和
+  // *non_shared + *value_length为解码出的长度和
   if (static_cast<uint32_t>(limit - p) < (*non_shared + *value_length)) {
     return nullptr;
   }
+  // 解码成功，返回key delta的起始位置
   return p;
 }
 
+// Block::Iter实现了Iterator接口，用于遍历Block中的所有entry
+// 注意下面的多数地址都是相对于data_的偏移量
 class Block::Iter : public Iterator {
  private:
   const Comparator* const comparator_;
-  const char* const data_;       // underlying block contents
-  uint32_t const restarts_;      // Offset of restart array (list of fixed32)
-  uint32_t const num_restarts_;  // Number of uint32_t entries in restart array
+  // Block的Data部分的起始地址
+  const char* const data_;
+  // Block的重启点数组的起始地址,为定长32位整数数组，数量为num_restarts_
+  // 是相对于data_的偏移量
+  uint32_t const restarts_;
+  // 重启点的数量
+  uint32_t const num_restarts_;
 
   // current_ is offset in data_ of current entry.  >= restarts_ if !Valid
+  // current_是当前entry在data_中的偏移量，若!Valid，则current_ >= restarts_
+  // restarts_是重启点数组的起始地址,同时也是kv entry部分的结束地址
+  // current_的更新是在ParseNextKey()中完成的，所以current_指向的是当前已经解析的entry的起始位置
   uint32_t current_;
-  uint32_t restart_index_;  // Index of restart block in which current_ falls
+  // restart_index_是current_所在的kv entry所属的重启点的索引
+  uint32_t restart_index_;
+  // key_存储current_指向的kv entry的key
   std::string key_;
+  // value_存储current_指向的kv entry的value
   Slice value_;
   Status status_;
 
@@ -93,22 +127,30 @@ class Block::Iter : public Iterator {
   }
 
   // Return the offset in data_ just past the end of the current entry.
+  // 返回当前entry的结束位置在data_中的偏移量，换句话说，就是下一个entry的起始位置
+  // 注意，这个返回值是相对于data_的偏移量
   inline uint32_t NextEntryOffset() const {
     return (value_.data() + value_.size()) - data_;
   }
 
+  // 获取第index个重启点对应的entry相对于data_的偏移量
   uint32_t GetRestartPoint(uint32_t index) {
     assert(index < num_restarts_);
+    // 重启点以定长32位整数形式存储，因此读取实际值时需要解码
+    // 解码出的值就是该重启点对应的entry相对于data_的偏移量
     return DecodeFixed32(data_ + restarts_ + index * sizeof(uint32_t));
   }
 
+  // 将当前interator的current_指针指向第index个重启点对应的entry的起始位置
   void SeekToRestartPoint(uint32_t index) {
     key_.clear();
     restart_index_ = index;
     // current_ will be fixed by ParseNextKey();
 
     // ParseNextKey() starts at the end of value_, so set value_ accordingly
+    // ParseNextKey()从value_的结束位置开始，因此需要设置value_的值
     uint32_t offset = GetRestartPoint(index);
+    // 当前value_为空，因此value_的起始位置为data_ + offset，需要解析出key_和value_
     value_ = Slice(data_ + offset, 0);
   }
 
@@ -144,10 +186,14 @@ class Block::Iter : public Iterator {
     assert(Valid());
 
     // Scan backwards to a restart point before current_
+    // 如果有必要，向前扫描到current_之前的一个重启点
+    // 只有当current_指向的entry恰好是一个重启点对应的entry，才会退回到前一个重启点对应的entry
     const uint32_t original = current_;
     while (GetRestartPoint(restart_index_) >= original) {
       if (restart_index_ == 0) {
         // No more entries
+        // 已经到达第一个重启点，没有更多的entry了
+        // current_指向重启点数组的起始位置，意味着entry解析结束
         current_ = restarts_;
         restart_index_ = num_restarts_;
         return;
@@ -155,15 +201,26 @@ class Block::Iter : public Iterator {
       restart_index_--;
     }
 
+    // 将current_指向重启点对应的entry的起始位置
     SeekToRestartPoint(restart_index_);
     do {
       // Loop until end of current entry hits the start of original entry
+      // 循环直到当前entry的结束位置达到原始entry的起始位置，那么当前entry就是我们要找的entry
     } while (ParseNextKey() && NextEntryOffset() < original);
   }
-
+  /**
+   * Seek方法的实现思路如下：
+   * 1. 二分查找重启点数组，找到最后一个key < target的重启点，首先可以根据iterator当前的位置
+   * 缩小一下二分查找的范围
+   * 2. 若当前key_小于target，且二分查找结束后left处的重启点索引恰好等于当前重启点索引,
+   *   说明要找的key就在当前重启点负责的这一块entries区间内,不必跳转到重启点对应的entry的起始位置，
+   *  直接从当前位置开始线性查找即可
+   * 3. 否则，跳转到重启点对应的entry的起始位置，然后在该重启点负责的entries区间内，找到第一个key >= target的entry
+  */
   void Seek(const Slice& target) override {
     // Binary search in restart array to find the last restart point
     // with a key < target
+    // 二分查找重启点数组，找到最后一个key < target的重启点
     uint32_t left = 0;
     uint32_t right = num_restarts_ - 1;
     int current_key_compare = 0;
@@ -172,18 +229,19 @@ class Block::Iter : public Iterator {
       // If we're already scanning, use the current position as a starting
       // point. This is beneficial if the key we're seeking to is ahead of the
       // current position.
+      // 如果当前已经在扫描，使用当前位置作为起始点。如果我们要查找的key在当前位置之后，这是有益的。
       current_key_compare = Compare(key_, target);
-      if (current_key_compare < 0) {
+      if (current_key_compare < 0) { // 当前key_小于target
         // key_ is smaller than target
         left = restart_index_;
-      } else if (current_key_compare > 0) {
+      } else if (current_key_compare > 0) { // 当前key_大于target
         right = restart_index_;
-      } else {
+      } else { // 当前key_等于target，刚好找到了
         // We're seeking to the key we're already at.
         return;
       }
     }
-
+    // 二分查找重启点数组，找到最后一个key < target的重启点
     while (left < right) {
       uint32_t mid = (left + right + 1) / 2;
       uint32_t region_offset = GetRestartPoint(mid);
@@ -191,7 +249,8 @@ class Block::Iter : public Iterator {
       const char* key_ptr =
           DecodeEntry(data_ + region_offset, data_ + restarts_, &shared,
                       &non_shared, &value_length);
-      if (key_ptr == nullptr || (shared != 0)) {
+      // 重启点对应的entry存储的key一定是一个完整的key，shared一定为0
+      if (key_ptr == nullptr || (shared != 0)) { // 解码失败或者shared不为0
         CorruptionError();
         return;
       }
@@ -199,23 +258,34 @@ class Block::Iter : public Iterator {
       if (Compare(mid_key, target) < 0) {
         // Key at "mid" is smaller than "target".  Therefore all
         // blocks before "mid" are uninteresting.
+        // "mid"处的key小于"target"，因此"mid"之前的所有块都不感兴趣
+        // 注意这里不是mid + 1，因为mid处的key小于target，mid处的entry是有可能是我们要找的
         left = mid;
       } else {
         // Key at "mid" is >= "target".  Therefore all blocks at or
         // after "mid" are uninteresting.
+        // "mid"处的key大于等于"target"，因此"mid"之后的所有块都不感兴趣
         right = mid - 1;
       }
     }
+    // 二分查找结束后，已经可以保证left处的重启点对应的entry的key < target
+    // left处的重启点就是最后一个key < target的重启点
 
     // We might be able to use our current position within the restart block.
     // This is true if we determined the key we desire is in the current block
     // and is after than the current key.
+    // 我们可能可以使用重启块内的当前位置。如果我们确定我们要查找的key在当前块中，并且在当前key之后，那么这是正确的。
     assert(current_key_compare == 0 || Valid());
+    // 若当前位置的key_小于target，且二分查找结束后left处的重启点索引恰好等于当前重启点索引
+    // 说明要找的key就在当前重启点负责的这一块entries区间内
     bool skip_seek = left == restart_index_ && current_key_compare < 0;
+    // 若skip_seek为true，说明要找的key就在当前重启点负责的这一块entries区间内
+    // 不必跳转到重启点对应的entry的起始位置，直接从当前位置开始解析即可
     if (!skip_seek) {
       SeekToRestartPoint(left);
     }
     // Linear search (within restart block) for first key >= target
+    // 在该重启点负责的entries区间内，找到第一个key >= target的entry
     while (true) {
       if (!ParseNextKey()) {
         return;
@@ -228,17 +298,22 @@ class Block::Iter : public Iterator {
 
   void SeekToFirst() override {
     SeekToRestartPoint(0);
+    // 重启点数组的第一个重启点对应的entry的起始位置就是data_的起始位置
+    // 解析完后，current_指向第一个entry的起始位置，key_和value_存储了第一个entry的key和value
     ParseNextKey();
   }
 
   void SeekToLast() override {
     SeekToRestartPoint(num_restarts_ - 1);
+    // 可能num_restarts_的数量在执行完SeekToRestartPoint后发生了变化
     while (ParseNextKey() && NextEntryOffset() < restarts_) {
       // Keep skipping
     }
   }
 
  private:
+ // 解析kv entry过程中出现错误，将status_设置为Corruption
+ // current_指向重启点数组的起始位置，意味着entry解析结束
   void CorruptionError() {
     current_ = restarts_;
     restart_index_ = num_restarts_;
@@ -248,10 +323,11 @@ class Block::Iter : public Iterator {
   }
 
   bool ParseNextKey() {
+    // 获取下一条待解析的entry的起始位置
     current_ = NextEntryOffset();
     const char* p = data_ + current_;
     const char* limit = data_ + restarts_;  // Restarts come right after data
-    if (p >= limit) {
+    if (p >= limit) { // 已经到达重启点数组的起始位置，说明没有更多的kv entry了
       // No more entries to return.  Mark as invalid.
       current_ = restarts_;
       restart_index_ = num_restarts_;
@@ -260,14 +336,20 @@ class Block::Iter : public Iterator {
 
     // Decode next entry
     uint32_t shared, non_shared, value_length;
+    // 完成后，p指向key delta的起始位置
     p = DecodeEntry(p, limit, &shared, &non_shared, &value_length);
-    if (p == nullptr || key_.size() < shared) {
+    // 此时Key_代表的是上一个entry的key，他们有shared个字节是相同的
+    // 因此，key_的长度不可能小于shared
+    if (p == nullptr || key_.size() < shared) { // 解码失败或者key的长度小于shared
       CorruptionError();
       return false;
     } else {
+      // 获取当前entry的Key和Value
       key_.resize(shared);
       key_.append(p, non_shared);
       value_ = Slice(p + non_shared, value_length);
+      // 每解析完一个entry后，都会尝试更新重启点的索引
+      // 当然理论上每隔block_restart_interval个entry才会更新一次
       while (restart_index_ + 1 < num_restarts_ &&
              GetRestartPoint(restart_index_ + 1) < current_) {
         ++restart_index_;
@@ -282,7 +364,7 @@ Iterator* Block::NewIterator(const Comparator* comparator) {
     return NewErrorIterator(Status::Corruption("bad block contents"));
   }
   const uint32_t num_restarts = NumRestarts();
-  if (num_restarts == 0) {
+  if (num_restarts == 0) {  // 重启点的数量为0，说明Block中没有数据
     return NewEmptyIterator();
   } else {
     return new Iter(comparator, data_, restart_offset_, num_restarts);

@@ -67,6 +67,7 @@ char* EncodeVarint64(char* dst, uint64_t v) {
   return reinterpret_cast<char*>(ptr);
 }
 
+// 将v值用变长编码方式存储到dst中
 void PutVarint64(std::string* dst, uint64_t v) {
   char buf[10];
   char* ptr = EncodeVarint64(buf, v);
@@ -125,6 +126,7 @@ bool GetVarint32(Slice* input, uint32_t* value) {
   }
 }
 
+// 在[p, limit)范围内解析出一个varint64值，存储到value中，返回值是解析后的下一个待操作的字节
 const char* GetVarint64Ptr(const char* p, const char* limit, uint64_t* value) {
   uint64_t result = 0;
   for (uint32_t shift = 0; shift <= 63 && p < limit; shift += 7) {
@@ -149,6 +151,7 @@ bool GetVarint64(Slice* input, uint64_t* value) {
   if (q == nullptr) {
     return false;
   } else {
+    // q指向解析后的下一个待操作的字节
     *input = Slice(q, limit - q);
     return true;
   }
