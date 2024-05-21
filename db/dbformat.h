@@ -14,6 +14,7 @@
 #include "leveldb/filter_policy.h"
 #include "leveldb/slice.h"
 #include "leveldb/table_builder.h"
+
 #include "util/coding.h"
 #include "util/logging.h"
 
@@ -21,16 +22,22 @@ namespace leveldb {
 
 // Grouping of constants.  We may want to make some of these
 // parameters set via options.
+// 常量的分组。我们可能希望通过选项设置其中的一些参数。
 namespace config {
+// LSM-Tree的最大层数
 static const int kNumLevels = 7;
 
 // Level-0 compaction is started when we hit this many files.
+// 当Level-0中的文件数达到这个值时，开始compaction。
 static const int kL0_CompactionTrigger = 4;
 
 // Soft limit on number of level-0 files.  We slow down writes at this point.
+// Level-0文件的数量的软限制。在这一点上，我们减慢写入速度。具体可见MakeRoomForWrite()函数。
+// 我们选择将每个写操作都延迟1ms，而不是把单个写操作延迟很多s，这样可以减小延迟方差。
 static const int kL0_SlowdownWritesTrigger = 8;
 
 // Maximum number of level-0 files.  We stop writes at this point.
+// Level-0文件的最大数量。在这一点上，我们停止写入。
 static const int kL0_StopWritesTrigger = 12;
 
 // Maximum level to which a new compacted memtable is pushed if it
@@ -39,9 +46,14 @@ static const int kL0_StopWritesTrigger = 12;
 // expensive manifest file operations.  We do not push all the way to
 // the largest level since that can generate a lot of wasted disk
 // space if the same key space is being repeatedly overwritten.
+// 如果新的压缩的memtable没有创建重叠，该memtable可以被推送到的最大层级。
+// 我们尝试推送到第2层，以避免相对昂贵的0=>1层级的compaction，并避免一些昂贵的manifest文件操作。
+// 我们不会一直推送到最大层级，因为如果相同的key空间被重复覆盖，这可能会产生大量的浪费磁盘空间。
+// TODO:后面看compact模块时再回头认真学习这个参数，先留坑。
 static const int kMaxMemCompactLevel = 2;
 
 // Approximate gap in bytes between samples of data read during iteration.
+// 在迭代期间读取的数据样本之间的近似间隔（字节）。
 static const int kReadBytesPeriod = 1048576;
 
 }  // namespace config
@@ -107,10 +119,11 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
 
 // A comparator for internal keys that uses a specified comparator for
 // the user key portion and breaks ties by decreasing sequence number.
-// 一个用于内部key的comparator，它使用一个指定的comparator来比较user key部分，并通过减小的sequence number来打破平局。
+// 一个用于内部key的comparator，它使用一个指定的comparator来比较user
+// key部分，并通过减小的sequence number来打破平局。
 class InternalKeyComparator : public Comparator {
  private:
- // 一般是BytewiseComparatorImpl类型
+  // 一般是BytewiseComparatorImpl类型
   const Comparator* user_comparator_;
 
  public:

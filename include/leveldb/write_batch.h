@@ -40,7 +40,7 @@ class Slice;
  * 1. WriteBatch类用于将一组更新原子地应用到数据库中。
  * 2. 更新是按照它们被添加到WriteBatch中的顺序应用的。
  * 3. 这组操作可以是Put操作，也可以是Delete操作。
-*/
+ */
 class LEVELDB_EXPORT WriteBatch {
  public:
   class LEVELDB_EXPORT Handler {
@@ -59,11 +59,12 @@ class LEVELDB_EXPORT WriteBatch {
   ~WriteBatch();
 
   // Store the mapping "key->value" in the database.
-  // 将映射"key->value"存储到数据库中。
+  // 将映射"key->value"存储到这个WriteBatch中。
   void Put(const Slice& key, const Slice& value);
 
   // If the database contains a mapping for "key", erase it.  Else do nothing.
   // 如果数据库中包含"key"的映射，则删除它。否则什么也不做。
+  // 实际上也是将这个操作存储到WriteBatch中。
   void Delete(const Slice& key);
 
   // Clear all updates buffered in this batch.
@@ -76,6 +77,7 @@ class LEVELDB_EXPORT WriteBatch {
   // This number is tied to implementation details, and may change across
   // releases. It is intended for LevelDB usage metrics.
   // 这个数字与实现细节有关，可能会在不同版本之间发生变化。它用于LevelDB的使用度量。
+  // 实际上是rep_的大小。
   size_t ApproximateSize() const;
 
   // Copies the operations in "source" to this batch.
@@ -84,28 +86,34 @@ class LEVELDB_EXPORT WriteBatch {
   // This runs in O(source size) time. However, the constant factor is better
   // than calling Iterate() over the source batch with a Handler that replicates
   // the operations into this batch.
-  // 这需要O(source size)的时间。然而，常数因子比使用一个Handler在source batch上调用Iterate()来复制操作到此batch中要好。
+  // 这需要O(source size)的时间。然而，常数因子比使用一个Handler在source
+  // batch上调用Iterate()来复制操作到此batch中要好。
   void Append(const WriteBatch& source);
 
   // Support for iterating over the contents of a batch.
   // 支持遍历batch的内容。遍历的过程中，将对应的操作应用到Handler中。
+  // BackGround:由WriteBatchInternal::InsertInto()方法调用，将这个WriteBatch对象中的操作插入到MemTable中。
   Status Iterate(Handler* handler) const;
 
  private:
   friend class WriteBatchInternal;
 
+  // rep_是WriteBatch的实际数据，是一个字符串，存储了一组更新操作。
   std::string rep_;  // See comment in write_batch.cc for the format of rep_
-//
-// WriteBatch::rep_ :=
-//    sequence: fixed64
-//    count: fixed32
-//    data: record[count]
-// record :=
-//    kTypeValue varstring varstring         |
-//    kTypeDeletion varstring
-// varstring :=
-//    len: varint32
-//    data: uint8[len]
+  //
+  // WriteBatch::rep_ :=
+  //    sequence: fixed64         // 序列号，代表这个WriteBatch的序列号
+  //    count: fixed32           // 表示这组更新操作的数量
+  //    data: record[count]     // 一组更新操作，每个record都表示一个更新操作
+  // record的内部格式根据操作类型不同而不同：
+  // 1.若是KTypeValue类型，则是一个Put操作，后面的两个varstring分别为key和value
+  // 2.若是KTypeDeletion类型，则是一个Delete操作，后面的varstring为key
+  // record :=
+  //    kTypeValue varstring varstring         |
+  //    kTypeDeletion varstring
+  // varstring :=
+  //    len: varint32
+  //    data: uint8[len]
 };
 
 }  // namespace leveldb

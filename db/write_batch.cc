@@ -41,28 +41,37 @@ void WriteBatch::Clear() {
 size_t WriteBatch::ApproximateSize() const { return rep_.size(); }
 
 Status WriteBatch::Iterate(Handler* handler) const {
+  // 将rep_转换为Slice对象
   Slice input(rep_);
   if (input.size() < kHeader) {
     return Status::Corruption("malformed WriteBatch (too small)");
   }
-
+  // 首先移除头部，即sequence和count
   input.remove_prefix(kHeader);
   Slice key, value;
   int found = 0;
   while (!input.empty()) {
     found++;
-    char tag = input[0];
+    // input当前只剩下data部分
+    // 如:KTypeValue(1字节)+key_length(1-5字节)+key+value_length(1-5字节)+value
+    // 或:KTypeDeletion(1字节)+key_length(1-5字节)+key
+    // data部分实际上是上述两种情况若干条record的集合
+    char tag = input[0]; // 获取操作类型:KTypeValue或KTypeDeletion
     input.remove_prefix(1);
     switch (tag) {
       case kTypeValue:
+      // 若解析成功，则key和value中分别保存了对应的data和data length
         if (GetLengthPrefixedSlice(&input, &key) &&
             GetLengthPrefixedSlice(&input, &value)) {
+          // handler可以理解为一个数据库对象，使得这次改变让用户可以看到，即放入到MemTable中
+          // 例如:db_test.cc中实现了一个简单的数据库，实际上就是将放到kvMap中
           handler->Put(key, value);
         } else {
           return Status::Corruption("bad WriteBatch Put");
         }
         break;
       case kTypeDeletion:
+      // Delete类型的操作只有key，没有value
         if (GetLengthPrefixedSlice(&input, &key)) {
           handler->Delete(key);
         } else {

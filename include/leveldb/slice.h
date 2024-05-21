@@ -53,15 +53,19 @@ class LEVELDB_EXPORT Slice {
   Slice& operator=(const Slice&) = default;
 
   // Return a pointer to the beginning of the referenced data
+  // 返回引用数据的指针
   const char* data() const { return data_; }
 
   // Return the length (in bytes) of the referenced data
+  // 返回引用数据的长度
   size_t size() const { return size_; }
 
   // Return true iff the length of the referenced data is zero
+  // 如果引用数据的长度为0，则返回true
   bool empty() const { return size_ == 0; }
 
   // Return the ith byte in the referenced data.
+  // 返回第i个字节
   // REQUIRES: n < size()
   char operator[](size_t n) const {
     assert(n < size());
@@ -69,12 +73,14 @@ class LEVELDB_EXPORT Slice {
   }
 
   // Change this slice to refer to an empty array
+  // 把data_设置为空字符串，size_设置为0
   void clear() {
     data_ = "";
     size_ = 0;
   }
 
   // Drop the first "n" bytes from this slice.
+  // 删除slice的前n个字节
   void remove_prefix(size_t n) {
     assert(n <= size());
     data_ += n;
@@ -82,6 +88,7 @@ class LEVELDB_EXPORT Slice {
   }
 
   // Return a string that contains the copy of the referenced data.
+  // 返回一个包含引用数据副本的字符串
   std::string ToString() const { return std::string(data_, size_); }
 
   // Three-way comparison.  Returns value:
@@ -91,6 +98,7 @@ class LEVELDB_EXPORT Slice {
   int compare(const Slice& b) const;
 
   // Return true iff "x" is a prefix of "*this"
+  // 如果x是*this的前缀，则返回true
   bool starts_with(const Slice& x) const {
     return ((size_ >= x.size_) && (memcmp(data_, x.data_, x.size_) == 0));
   }

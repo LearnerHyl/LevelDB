@@ -29,9 +29,13 @@ void PutLengthPrefixedSlice(std::string* dst, const Slice& value);
 
 // Standard Get... routines parse a value from the beginning of a Slice
 // and advance the slice past the parsed value.
-// 对编码的数据进行解码，然后保存到value中
+// 对input数据中的第一个varint32编码类型的数据进行解码，解码结果保存到value中，返回值是是否解码成功
 bool GetVarint32(Slice* input, uint32_t* value);
+// 对input数据中的第一个varint64编码类型的数据进行解码，解码结果保存到value中，返回值是是否解码成功
 bool GetVarint64(Slice* input, uint64_t* value);
+// 在WriteBatch中Iterate键值对时使用
+// 已知：input=[len][data]，其中len是一个varint32类型的数据，表示data的长度
+// result是一个Slice(data,len)，即result指向data，result.size()=len
 bool GetLengthPrefixedSlice(Slice* input, Slice* result);
 
 // Pointer-based variants of GetVarint...  These either store a value
@@ -40,7 +44,9 @@ bool GetLengthPrefixedSlice(Slice* input, Slice* result);
 // [p..limit-1]
 // 基于指针的GetVarint...变体。这些例程将值存储在*v中，并返回刚刚解析的值的指针，或在错误时返回nullptr。
 // 注意：这些例程只查看[p..limit-1]范围内的字节
+// 由GetVarint32调用
 const char* GetVarint32Ptr(const char* p, const char* limit, uint32_t* v);
+// 由GetVarint64调用
 const char* GetVarint64Ptr(const char* p, const char* limit, uint64_t* v);
 
 // Returns the length of the varint32 or varint64 encoding of "v"

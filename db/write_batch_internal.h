@@ -40,6 +40,9 @@ class WriteBatchInternal {
 
   static void SetContents(WriteBatch* batch, const Slice& contents);
 
+  // BackGround：调用DBImpl::write()方法写入一批writers数据，每个writer包含一个WriteBatch对象，
+  // 每当一个WriteBatch对象中的操作被写入到log后，就会调用WriteBatchInternal::InsertInto()方法将
+  // 这个WriteBatch对象中的操作插入到MemTable中。同时这个过程会使这批操作对用户可见,即插入到MemTable中。
   static Status InsertInto(const WriteBatch* batch, MemTable* memtable);
 
   static void Append(WriteBatch* dst, const WriteBatch* src);
