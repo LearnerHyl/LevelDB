@@ -103,8 +103,7 @@ class Block::Iter : public Iterator {
   const Comparator* const comparator_;
   // Block的Data部分的起始地址
   const char* const data_;
-  // Block的重启点数组的起始地址,为定长32位整数数组，数量为num_restarts_
-  // 是相对于data_的偏移量
+  // Block的重启点数组的起始地址,为定长32位整数数组，是相对于data_的偏移量
   uint32_t const restarts_;
   // 重启点的数量
   uint32_t const num_restarts_;
@@ -118,7 +117,7 @@ class Block::Iter : public Iterator {
   uint32_t restart_index_;
   // key_存储current_指向的kv entry的key
   std::string key_;
-  // value_存储current_指向的kv entry的value
+  // value_存储current_指向的kv entry的value，同时可以用来计算出下一个entry的起始位置
   Slice value_;
   Status status_;
 
@@ -141,7 +140,8 @@ class Block::Iter : public Iterator {
     return DecodeFixed32(data_ + restarts_ + index * sizeof(uint32_t));
   }
 
-  // 将当前interator的current_指针指向第index个重启点对应的entry的起始位置
+  // 将当前interator的current_指针指向第index个重启点对应的entry的起始位置，
+  // 注意执行完后，key_和value_都是空的，还需要调用ParseNextKey()来解析出key_和value_
   void SeekToRestartPoint(uint32_t index) {
     key_.clear();
     restart_index_ = index;

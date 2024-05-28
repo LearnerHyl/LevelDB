@@ -5,16 +5,17 @@
 #ifndef STORAGE_LEVELDB_DB_DB_IMPL_H_
 #define STORAGE_LEVELDB_DB_DB_IMPL_H_
 
+#include "db/dbformat.h"
+#include "db/log_writer.h"
+#include "db/snapshot.h"
 #include <atomic>
 #include <deque>
 #include <set>
 #include <string>
 
-#include "db/dbformat.h"
-#include "db/log_writer.h"
-#include "db/snapshot.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
+
 #include "port/port.h"
 #include "port/thread_annotations.h"
 
@@ -189,7 +190,7 @@ class DBImpl : public DB {
   // imm_是正在被压缩的MemTable对象
   MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
   // 用于标记imm_是否为空，以便后台线程检测到非空的imm_
-  std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
+  std::atomic<bool> has_imm_;  // So bg thread can detect non-null imm_
 
   // 用于记录当前的log文件和log文件的Writer对象。
   // 表示数据库当前正在写入的Log文件的对象。

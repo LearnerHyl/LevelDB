@@ -32,6 +32,7 @@ class BytewiseComparatorImpl : public Comparator {
                              const Slice& limit) const override {
     // Find length of common prefix
     size_t min_length = std::min(start->size(), limit.size());
+    // diff_index代表start字符串和limit切片的第一个不相同的字符的索引
     size_t diff_index = 0;
     while ((diff_index < min_length) &&
            ((*start)[diff_index] == limit[diff_index])) {

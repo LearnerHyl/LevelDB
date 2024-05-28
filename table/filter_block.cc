@@ -22,7 +22,7 @@ FilterBlockBuilder::FilterBlockBuilder(const FilterPolicy* policy)
 
 void FilterBlockBuilder::StartBlock(uint64_t block_offset) {
   // 默认每2KB数据生成一个新的filter
-  // 计算当前data block中的数据一共需要多少个filter
+  // 计算当前data block中的数据当前需要的filter的index
   uint64_t filter_index = (block_offset / kFilterBase);
   // 若当前data
   // block中的数据需要的filter数量大于当前已经生成的filter数量，则生成新的filter

@@ -40,6 +40,7 @@
 
 #include "leveldb/comparator.h"
 #include "leveldb/options.h"
+
 #include "util/coding.h"
 
 namespace leveldb {
@@ -47,53 +48,71 @@ namespace leveldb {
 BlockBuilder::BlockBuilder(const Options* options)
     : options_(options), restarts_(), counter_(0), finished_(false) {
   assert(options->block_restart_interval >= 1);
-  restarts_.push_back(0);  // First restart point is at offset 0
+  // 第一个重启点在buffer_中的偏移量为0
+  restarts_.push_back(0);
 }
 
 void BlockBuilder::Reset() {
   buffer_.clear();
   restarts_.clear();
-  restarts_.push_back(0);  // First restart point is at offset 0
+  restarts_.push_back(0);
   counter_ = 0;
   finished_ = false;
   last_key_.clear();
 }
 
 size_t BlockBuilder::CurrentSizeEstimate() const {
-  return (buffer_.size() +                       // Raw data buffer
-          restarts_.size() * sizeof(uint32_t) +  // Restart array
-          sizeof(uint32_t));                     // Restart array length
+  return (
+      buffer_.size() +                       // Raw data buffer
+      restarts_.size() * sizeof(uint32_t) +  // Restart array
+      sizeof(uint32_t));  // Restart array length，uint32_t类型的重启点数目值
 }
 
 Slice BlockBuilder::Finish() {
   // Append restart array
+  // 将restarts_中的所有重启点的偏移量用定长32位整数存储到buffer_中
   for (size_t i = 0; i < restarts_.size(); i++) {
     PutFixed32(&buffer_, restarts_[i]);
   }
+  // 将重启点数目值存储到buffer_中
   PutFixed32(&buffer_, restarts_.size());
   finished_ = true;
+  // 此时buffer_中存储了所有的kv对和重启点信息，且符合data block中data部分的格式
   return Slice(buffer_);
 }
 
 void BlockBuilder::Add(const Slice& key, const Slice& value) {
+  // 上一个添加的key
   Slice last_key_piece(last_key_);
+  // 确保没有调用Finish()方法
   assert(!finished_);
+  // 确保最近的重启点拥有的kv对数量小于block_restart_interval
   assert(counter_ <= options_->block_restart_interval);
+  // 确保key比之前添加的任何key都要大
   assert(buffer_.empty()  // No values yet?
          || options_->comparator->Compare(key, last_key_piece) > 0);
+  //  shared用来保存本次key与上一次key的共享前缀长度
   size_t shared = 0;
+  // counter_用来记录最近的重启点拥有的kv对数量,当counter_ < block_restart_interval时，进行前缀压缩
   if (counter_ < options_->block_restart_interval) {
     // See how much sharing to do with previous string
+    // 计算key与上一次key的共享前缀长度
     const size_t min_length = std::min(last_key_piece.size(), key.size());
     while ((shared < min_length) && (last_key_piece[shared] == key[shared])) {
       shared++;
     }
   } else {
     // Restart compression
+    // 当counter_ >= block_restart_interval时, 存储整个key，不进行前缀压缩
+    // 记录新的重启点，并reset counter_
     restarts_.push_back(buffer_.size());
     counter_ = 0;
   }
+  // 参考block中kv对的存储格式，下面很容易理解
+  // non_shared用来保存key中不与上一次key共享的部分的长度
   const size_t non_shared = key.size() - shared;
+
+  // kv对的存储格式：shared_bytes | unshared_bytes | value_length | key_delta | value
 
   // Add "<shared><non_shared><value_size>" to buffer_
   PutVarint32(&buffer_, shared);
