@@ -32,10 +32,16 @@ class Comparator;
  * ---------------
  * NumRestarts
  * ----------
- * 其中，kv Entry是一个键值对，Restart
- * Point是一个重启点，NumRestarts是重启点的数量。
+ * 其中，kv Entry是一个键值对，RestartPoint是一个重启点，NumRestarts是重启点的数量。
  * 重启点实现了Block的快速查找，每个重启点存储了一个键值对的偏移量。
- * 重启点是实现前缀压缩存储的关键，每一个重启点对应的键值对的key是一个完整的key，
+ * 重启点是实现前缀压缩存储的关键，每一个重启点对应的键值对的key是一个完整的key。
+ * 
+ * 此外，Index Block也使用了Block结构体，大体字段与上面一致，只是kv Entry中的字段有所不同：
+ * Entry(MaxKey-1, Block-1-Offset, Length)
+ * Entry(MaxKey-2, Block-2-Offset, Length)
+ * ....
+ * MaxKey-i代表大于Block-i中的最后一个key、且小于Block-i+1待写入的第一个key的最短key。
+ * Data Block内部的KV对是严格有序的。
  */
 
 class Block {

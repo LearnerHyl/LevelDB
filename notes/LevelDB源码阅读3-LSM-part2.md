@@ -43,10 +43,56 @@ leveldb提供持久化，也就是需要将内存中的数据保存到磁盘上�
 
 ![image-20240528090558974](./assets/image-20240528090558974.png)
 
-具体的设计思想还是要看TableBuilder中代码的注释，写在了代码上面。总体来说，在像TableBuilder添加键值对的过程中，除了总大小到达阈值后会生成一个DataBlock， filter block与data index block也在被同步构建；每当一个Data Block构建完成后，对应的会在filter block中生成若干个filter data,同样会在data index block中生成一个index entry。
+具体的设计思想还是要看TableBuilder中代码的注释，写在了代码上面。总体来说，在向TableBuilder添加键值对的过程中，除了总大小到达阈值后会生成一个DataBlock， filter block与data index block也在被同步构建；每当一个Data Block构建完成后，对应的会在filter block中生成若干个filter data,同样会在data index block中生成一个index entry。
 
 当所有的kv对被写入后，首先把最后一批可能存在的不足一个Data Block大小的键值对数据生成一个data block。之后就可以根据当前信息，先后添加filter block，meta index block，data index block，footer这些，之后就生成了一个完整的SSTable，里面有很多细节值得学习，还是看源码。
 
-# 读取SSTable
+# LevelDB的读操作
 
-SSTable读取的相关代码在table.h和table.cc中，同样是根据Table类生成一个Iterator来进行读取，这里会涉及到BloomFilter的介绍。
+首先，从宏观上来看，leveldb 数据读取经过三个阶段 :
+
+- 从**MemTable**中查找数据
+- 从**Immutable MemTable**(将要被刷到磁盘的MemTable)中查找数据
+- 从SST中查找数据，重点学习的部分。
+
+## MemTable中的查找逻辑-复习
+
+MemTable的底层数据结构是跳表，因此查找是基于跳表的规则进行的。用户查询的UserKey会被封装成**LookupKey**结构进行查询，它本质就是一个**InternalKey**，他通过序列号支持查询历史版本，默认查询最新版本(`sequencenumber`取最大)。回顾一下Internal Key的格式：
+
+![image-20240528210922745](./assets/image-20240528210922745.png)
+
+它将`LookupKey`转换成与MemTable中维护的entry相近的一种表示: `|internal_key_len | user_key | sequence_number |`。它在内部基于`SkipList`查找大于等于用户提交的`internal_key`的数据(基于`InternalKeyComparator`的比较策略)。找到数据以后，因为拿到的是大于等于的结果，所以进行`user_key`与`ValueType`的精确比对查询。
+
+这部分源码之前已经做过学习，并且有相关注释，可以具体查看。
+
+## 读取SSTable-TwoLevelIterator思想
+
+当我们需要从SSTable中读取数据时，会对Table类生成一个TwoLevelIterator进行读取，从名字来看，它是一个两层迭代器对象，第一层是Index Block的迭代器，通过遍历Index Block查找目标key应该所在的块的BlockHandle；
+
+根据第一层迭代器获取到的BlockHandle，获取到目标Block的BlockContents，并构造BlockReader这个第二个迭代器，以读取目标块并找到对应的KV对。
+
+要明白的是，无论是第一层还是第二层迭代器，他们本质上都是以Block对象为基础生成的迭代器，因此读取的逻辑是相似的，都遵守Block的内部格式。具体源码看table.cc，two_level_iterator.cc文件。
+
+### TwoLevelIterator设计
+
+双层迭代器, 对应的类为 `class leveldb::<unnamed>::TwoLevelIterator`, 位于 `table/two_level_iterator.cc` 文件. 它的父类为 `leveldb::Iterator`, 所以表现出来的性质是一样的.
+
+该类设计比较巧妙, 这主要是由 sstable 文件结构决定的. 具体地, 要想在 sstable 文件中找到某个 key/value 对, 肯定先要找到它所属的 data Block, 而要找到 data Block 就要先在 index block 找到其对应的 BlockHandle. 双层迭代器就是这个寻找过程的实现.
+
+该类包含两个迭代器封装：
+
+- 一个是 index_iter_, 它指向 index block 数据项. 针对每个 data block 都有一个对应的 entry 包含在 index block 中, entry 包含一个 key/value 对, 其中：
+  - key 为大于等于对应 data block 最后(也是最大的, 因为排序过了)一个 key 同时小于接下来的 data block 的第一个 key 的(比较拗口)字符串;
+  - value 是指向一个对应 data block 的 BlockHandle.
+- 另一个是 data_iter_, 它指向 data block 包含的数据项. 至于这个 data block 是否与 index_iter_ 所指数据项对应 data block 一致, 那要看实际情况, 不过即使不一致也无碍.
+
+示意图如下:
+
+<img src="./assets/image-20240530164730111.png" alt="image-20240530164730111" style="zoom:67%;" />
+
+这两个迭代器, 可以把 index_iter 看作钟表的时针, 指向具体小时, 可以把 data_iter_ 看作更精细的分针, 指向当前小时的具体分钟. 两个指针一起配合精确定位到我们要查询的数据。
+
+# BloomFilter-布隆过滤器
+
+
+

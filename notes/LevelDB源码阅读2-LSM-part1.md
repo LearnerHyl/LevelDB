@@ -363,11 +363,13 @@ meta index block用来存储filter block在整个sstable中的索引信息。因
 
 ## index block结构
 
-与meta index block类似，index block用来存储所有data block的相关索引信息。indexblock包含若干条记录，每一条记录代表一个data block的索引信息。
+与meta index block类似，index block用来存储所有data block的相关索引信息。indexblock包含若干条记录，每一条记录代表一个data block的索引信息。<u>index block的字段格式与Data Block相似，因为他们都共享了一个BlockBuilder类，因此前缀压缩等等这些优化也适用于Index Block。</u>
 
-<img src="./assets/image-20240517183014170.png" alt="image-20240517183014170" style="zoom:67%;" />
+<img src="./assets/image-20240528220936096.png" alt="image-20240528220936096" style="zoom: 33%;" />
 
-上图可知，Index Block中的一条record包含三个字段：
+<img src="./assets/image-20240517183014170.png" alt="image-20240517183014170" style="zoom: 50%;" />
+
+上图可知，Index Block中的一条Entry包含三个字段：
 
 1. data block i 中最大的key值。这个MaxKey 是一个大于等于当前 data block 中最大的 key 且小于下一个 block 中最小（短）的 key，这一块的逻辑可以参考 FindShortestSeparator 的调用和实现。这样做是为了减小 index block 的体积，毕竟我们希望程序运行的时候，index block 被尽可能 cache 在内存中。
 
@@ -377,9 +379,21 @@ meta index block用来存储filter block在整个sstable中的索引信息。因
 
 3. 该data block的大小；
 
-此外，data block i最大的key值同时也是该index record的key值，如此设计的目的是，依次比较index block中记录信息的key值即可实现快速定位目标数据在哪个data block中。
+此外，data block i最大的key值同时也是该index record的key值，如此设计的目的是，依次比较index block中记录信息的key值即可实现快速定位目标数据在哪个data block中。每个SSTable中只有一个index block。
 
-每个SSTable中只有一个index block。
+其逻辑结构与Data Block完全一致，只是每个Entry中所包含的字段有所不同。Data Block是：
+
+```c++
+kv Entry 1(sharedLen, nonSharedLen, valueLen, keyDelta, value)
+```
+
+而Index Block中的Entry有所不同：
+
+```c++
+Entry(MaxKey-1, Block-1-Offset, Length)
+```
+
+ MaxKey-i代表大于Block-i中的最后一个key、且小于Block-i+1待写入的第一个key的最短key。Data Block内部的KV对是严格有序的。
 
 # 附录：跳表、平衡树、红黑树、B+树、B树的作为索引的对比
 

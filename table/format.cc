@@ -78,28 +78,33 @@ Status Footer::DecodeFrom(Slice* input) {
 
 Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
                  const BlockHandle& handle, BlockContents* result) {
+  // 初始化结果BlockContents对象
   result->data = Slice();
   result->cachable = false;
   result->heap_allocated = false;
 
-  // Read the block contents as well as the type/crc footer.
-  // See table_builder.cc for the code that built this structure.
+  // 读取块内容以及类型/校验和尾部。
+  // 详细见table_builder.cc中构建此结构的代码。
   size_t n = static_cast<size_t>(handle.size());
+  // 分配一个新的缓冲区用于存储块内容和尾部信息
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;
+  // 从文件中读取指定大小的数据到缓冲区
   Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
   if (!s.ok()) {
     delete[] buf;
     return s;
   }
+  // 如果读取的数据大小不符合预期，则返回截断块读取的错误状态
   if (contents.size() != n + kBlockTrailerSize) {
     delete[] buf;
     return Status::Corruption("truncated block read");
   }
 
-  // Check the crc of the type and the block contents
-  const char* data = contents.data();  // Pointer to where Read put the data
+  // 检查类型和块内容的crc校验和
+  const char* data = contents.data();  // 指向读取数据的位置
   if (options.verify_checksums) {
+    // 计算并验证crc校验和
     const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
     const uint32_t actual = crc32c::Value(data, n + 1);
     if (actual != crc) {
@@ -109,31 +114,32 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
     }
   }
 
+  // 根据块类型处理数据
   switch (data[n]) {
-    case kNoCompression:
+    case kNoCompression:  // 无压缩
       if (data != buf) {
-        // File implementation gave us pointer to some other data.
-        // Use it directly under the assumption that it will be live
-        // while the file is open.
+        // 文件实现给了我们指向其他数据的指针。直接使用它，假设它在文件打开期间有效。
         delete[] buf;
         result->data = Slice(data, n);
         result->heap_allocated = false;
-        result->cachable = false;  // Do not double-cache
+        result->cachable = false;  // 不进行双重缓存
       } else {
         result->data = Slice(buf, n);
         result->heap_allocated = true;
         result->cachable = true;
       }
-
-      // Ok
       break;
-    case kSnappyCompression: {
+
+    case kSnappyCompression: {  // Snappy压缩
       size_t ulength = 0;
+      // 获取Snappy压缩数据的解压后长度
       if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {
         delete[] buf;
         return Status::Corruption("corrupted snappy compressed block length");
       }
+      // 分配缓冲区用于存储解压后的数据
       char* ubuf = new char[ulength];
+      // 解压数据
       if (!port::Snappy_Uncompress(data, n, ubuf)) {
         delete[] buf;
         delete[] ubuf;
@@ -145,13 +151,17 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
       result->cachable = true;
       break;
     }
-    case kZstdCompression: {
+
+    case kZstdCompression: {  // Zstd压缩
       size_t ulength = 0;
+      // 获取Zstd压缩数据的解压后长度
       if (!port::Zstd_GetUncompressedLength(data, n, &ulength)) {
         delete[] buf;
         return Status::Corruption("corrupted zstd compressed block length");
       }
+      // 分配缓冲区用于存储解压后的数据
       char* ubuf = new char[ulength];
+      // 解压数据
       if (!port::Zstd_Uncompress(data, n, ubuf)) {
         delete[] buf;
         delete[] ubuf;
@@ -163,7 +173,8 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
       result->cachable = true;
       break;
     }
-    default:
+
+    default:  // 未知压缩类型
       delete[] buf;
       return Status::Corruption("bad block type");
   }
