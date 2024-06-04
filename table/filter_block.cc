@@ -71,7 +71,7 @@ void FilterBlockBuilder::GenerateFilter() {
   if (num_keys == 0) {
     // Fast path if there are no keys for this filter
     // 若没有添加任何key，则直接在filter_offsets_记录新的filter data的起始位置
-    // FIXME:没有任何key时，是否需要生成一个空的filter data？
+    // 若没有添加任何key，则直接生成一个空的filter data
     filter_offsets_.push_back(result_.size());
     return;
   }
@@ -95,8 +95,9 @@ void FilterBlockBuilder::GenerateFilter() {
   // 为当前的keys_集合生成filter data，并将filter data追加到result_中
   // 首先把本次将要生成的filter的起始位置保存到filter_offsets_中
   filter_offsets_.push_back(result_.size());
-  // 调用FilterPolicy的CreateFilter()方法为当前的keys_集合生成filter data
-  // TODO:后面看布隆过滤器源码时再来看这部分
+  // 调用FilterPolicy的CreateFilter()方法为当前的keys_集合生成filter data，
+  // 并将filter data保存到result_中。
+  // 注意每个filter data的尾部都保存了该过滤器使用了多少个hash函数，是size_t类型的
   policy_->CreateFilter(&tmp_keys_[0], static_cast<int>(num_keys), &result_);
 
   // 清空tmp_keys_和keys_、start_，为下一次GenerateFilter()做准备
@@ -144,7 +145,8 @@ bool FilterBlockReader::KeyMayMatch(uint64_t block_offset, const Slice& key) {
     if (start <= limit && limit <= static_cast<size_t>(offset_ - data_)) {
       // 获取第index个filter data的内容，将其转化为Slice对象
       Slice filter = Slice(data_ + start, limit - start);
-      // TODO:后面看布隆过滤器源码时再来看这部分，涉及到filter data的解析
+      // 调用FilterPolicy的KeyMayMatch()方法判断key是否在filter中，
+      // 判断的过程中使用的hash函数和处理流程与CreateFilter()方法一致
       return policy_->KeyMayMatch(key, filter);
     } else if (start == limit) {  // 从这里来看，GernalFilterPolicy的CreateFilter()方法生成的filter
                                   // data可能为空

@@ -325,9 +325,7 @@ data block中存储的数据是leveldb中的keyvalue键值对。其中一个data
 
 为了加快sstable中数据查询的效率，在直接查询datablock中的内容之前，leveldb首先根据filter block中的过滤数据判断指定的datablock中是否有需要查询的数据，若判断不存在，则无需对这个datablock进行数据查找。
 
-filter block存储的是data block数据的一些过滤信息。这些过滤数据一般指代布隆过滤器的数据，用于加快查询的速度，关于布隆过滤器的详细内容，需要详细的看这部分源码。
-
-> 看完SSTable的整体流程后，会回过头来看布隆过滤器这块。
+filter block存储的是data block数据的一些过滤信息。这些过滤数据一般指代布隆过滤器的数据，用于加快查询的速度，每个filter data的尾部存储的是该filter使用的哈希函数的数量k_，即每次对该过滤器进行读写的时候需要经过多少个哈希函数的计算。
 
 <img src="./assets/image-20240517175516318.png" alt="image-20240517175516318" style="zoom:67%;" />
 

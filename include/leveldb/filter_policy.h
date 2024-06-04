@@ -49,7 +49,7 @@ class LEVELDB_EXPORT FilterPolicy {
   // Warning: do not change the initial contents of *dst.  Instead,
   // append the newly constructed filter to *dst.
   // 警告:不要更改*dst的初始内容。相反，将新构造的过滤器附加到*dst。
-  // TODO:生成的原理需要看布隆过滤器的原理，这部分到后面具体学习布隆过滤器时再来看
+  // 创建一个过滤器，keys指定这一批所有的key，n指定key的个数，dst是一个string对象，用于存储过滤器的内容。
   virtual void CreateFilter(const Slice* keys, int n,
                             std::string* dst) const = 0;
 
@@ -61,6 +61,7 @@ class LEVELDB_EXPORT FilterPolicy {
   // “filter”包含在此类上的先前调用CreateFilter()附加的数据。
   // 如果键在传递给CreateFilter()的键列表中，则此方法必须返回true。
   // 如果键不在列表中，则此方法可能返回true或false，但它应该以很高的概率返回false。
+  // 通过filter和key来判断key是否在filter中，如果在则返回true，否则返回false。
   virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const = 0;
 };
 

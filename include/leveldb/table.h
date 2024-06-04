@@ -27,6 +27,12 @@ class TableCache;
 // Table可以安全地被多个线程并发访问，而不需要外部同步机制。
 // Table是SSTable(Sorted String Table)的主要实现载体，而其内部封装的Rep对象存储了访问一个SSTable所需的所有信息。
 // 因此可以认为Table是对Rep对象的进一步封装，提供了一些访问Rep对象的接口。
+// 
+// 每个db实例都有一个TableCache实例，TableCache中封装了一个ShardedLRUCache实例，用于缓存Table实例。
+// TableCache中的kv对的key是SSTable的编号，value统一为Cache::Handle，里面的value是TableAndFile实例的指针。
+// BlockCache中的kv对的key是cached_id+block_offset，value统一为Cache::Handle，里面的value是Block实例的指针。
+// - block_offset是从BlockHandle中获取的，表示Block在SSTable中的偏移量。
+// 
 class LEVELDB_EXPORT Table {
  public:
   // Attempt to open the table that is stored in bytes [0..file_size)

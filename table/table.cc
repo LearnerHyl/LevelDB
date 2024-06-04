@@ -218,15 +218,17 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     // 如果块缓存不为空
     if (block_cache != nullptr) {
       char cache_key_buffer[16];
-      // 编码缓存键，前8个字节是cache_id，后8个字节是该block在SSTable中的起始偏移量
+      // 这里使用到了BlockCache，对接上了TableCache。
+      // 每个DB实例有一个TableCache对象，TableCache内部采用了ShardedLRUCache对象，因此每个
+      // TableCache对象内部有多个LRUCache对象，每个LRUCache对象都有自己的cache_id，用于标识。
+      // 编码缓存键，前8个字节是cache_id，后8个字节是该block在SSTable中的起始偏移量。
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
       EncodeFixed64(cache_key_buffer + 8, handle.offset());
       Slice key(cache_key_buffer, sizeof(cache_key_buffer));
       // 查找缓存中的块，根据key获取目标block的cache_handle
-      // 具体细节后续学习LRUCache部分代码时再详细了解
       cache_handle = block_cache->Lookup(key);
       if (cache_handle != nullptr) {
-        // 如果缓存命中，根据cache_handle获取block
+        // 如果缓存命中，根据cache_handle获取对应的Block对象。
         block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
       } else {
         // 如果缓存未命中，从文件中读取块
