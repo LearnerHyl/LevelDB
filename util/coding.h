@@ -20,11 +20,15 @@
 namespace leveldb {
 
 // Standard Put... routines append to a string
-// 将value用一定的规则进行编码，然后保存到dst中
+// 将value值用定长32位编码方式编码，之后追加到dst中
 void PutFixed32(std::string* dst, uint32_t value);
+// 将value值用定长64位编码方式编码，之后追加到dst中
 void PutFixed64(std::string* dst, uint64_t value);
+// 将value值用变长编码方式编码，之后追加到dst中
 void PutVarint32(std::string* dst, uint32_t value);
+// 将value值用变长编码方式编码，之后追加到dst中
 void PutVarint64(std::string* dst, uint64_t value);
+// 首先将value的长度用变长编码方式编码，追加到dst中;之后将value本身的值追加到dst中
 void PutLengthPrefixedSlice(std::string* dst, const Slice& value);
 
 // Standard Get... routines parse a value from the beginning of a Slice

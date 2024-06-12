@@ -174,7 +174,7 @@ BlockCache是在TableCache的基础上，为了更方便的访问SSTable中的�
 
 BlockCache：
 
-- **key：** 当前table对应的缓存id，因为TableCache使用的是ShardedLRUCache，因此每个Cache都有自己的CacheID编号。BlockData在SSTable文件中的起始偏移量。
+- **key：** 当前table对应的缓存id，因为TableCache使用的是ShardedLRUCache，因此每个Cache都有自己的CacheID编号；第二个字段是BlockData在SSTable文件中的起始偏移量。
 - **Value：** 就是真实的BlockData数据。在代码中是以Cache::Handle形式存在，在该CacheHandle中存储的Value就是一个Block对象。
 
 ## BlockCache和TableCache概览

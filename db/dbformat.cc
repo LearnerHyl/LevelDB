@@ -12,12 +12,14 @@
 
 namespace leveldb {
 
+// 将sequenceNumber和type打包成一个uint64_t类型的整数，作为InternalKey的一部分
 static uint64_t PackSequenceAndType(uint64_t seq, ValueType t) {
   assert(seq <= kMaxSequenceNumber);
   assert(t <= kValueTypeForSeek);
   return (seq << 8) | t;
 }
 
+// 按照InternalKey的格式从ParseInternalKey中解析出来，并追加到result中
 void AppendInternalKey(std::string* result, const ParsedInternalKey& key) {
   result->append(key.user_key.data(), key.user_key.size());
   PutFixed64(result, PackSequenceAndType(key.sequence, key.type));
@@ -94,7 +96,7 @@ void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
     // User key has become shorter physically, but larger logically.
     // Tack on the earliest possible number to the shortened user key.
     // 用户key在物理上变得更短，但在逻辑上变得更大。
-    // 给tmp加上序列号和类型？
+    // 给tmp加上序列号和类型
     PutFixed64(&tmp,
                PackSequenceAndType(kMaxSequenceNumber, kValueTypeForSeek));
     // 压缩后的字符串比较结果:user_key < tmp

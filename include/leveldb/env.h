@@ -334,6 +334,7 @@ LEVELDB_EXPORT Status WriteStringToFile(Env* env, const Slice& data,
                                         const std::string& fname);
 
 // A utility routine: read contents of named file into *data
+// 一个实用程序例程：将名称为fname的文件的内容读入*data
 LEVELDB_EXPORT Status ReadFileToString(Env* env, const std::string& fname,
                                        std::string* data);
 

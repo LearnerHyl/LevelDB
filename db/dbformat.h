@@ -75,6 +75,8 @@ enum ValueType { kTypeDeletion = 0x0, kTypeValue = 0x1 };
 // kValueTypeForSeek定义了在构造用于寻找特定序列号的ParsedInternalKey对象时应传递的ValueType
 // （因为我们按降序对序列号进行排序，并且值类型嵌入在内部键中的序列号的低8位中，
 // 我们需要使用最高编号的ValueType，而不是最低编号的ValueType）。
+// 
+// 在Version_set.cc的SomeFileOverlapsWithRange()函数中，在搜索文件时，会使用kValueTypeForSeek。
 static const ValueType kValueTypeForSeek = kTypeValue;
 
 typedef uint64_t SequenceNumber;
@@ -88,8 +90,8 @@ static const SequenceNumber kMaxSequenceNumber = ((0x1ull << 56) - 1);
 
 struct ParsedInternalKey {
   Slice user_key;
-  SequenceNumber sequence;
-  ValueType type;
+  SequenceNumber sequence; // 7 bytes，表示版本号
+  ValueType type;  // 1 byte，表示该版本是删除还是插入
 
   ParsedInternalKey() {}  // Intentionally left uninitialized (for speed)
   ParsedInternalKey(const Slice& u, const SequenceNumber& seq, ValueType t)
@@ -98,20 +100,26 @@ struct ParsedInternalKey {
 };
 
 // Return the length of the encoding of "key".
+// 返回“user_key”的编码后的长度。+8是因为编码后的数据中还包含了sequence和type。
+// sequence是7个字节，type是1个字节。
 inline size_t InternalKeyEncodingLength(const ParsedInternalKey& key) {
   return key.user_key.size() + 8;
 }
 
 // Append the serialization of "key" to *result.
+// 将“key”的序列化后的数据附加到*result。
 void AppendInternalKey(std::string* result, const ParsedInternalKey& key);
 
 // Attempt to parse an internal key from "internal_key".  On success,
 // stores the parsed data in "*result", and returns true.
+// 尝试从“internal_key”解析一个内部键。成功时，将解析后的数据存储在“*result”中，并返回true。
 //
 // On error, returns false, leaves "*result" in an undefined state.
+// 在错误时，返回false，将“*result”保留在未定义状态。
 bool ParseInternalKey(const Slice& internal_key, ParsedInternalKey* result);
 
 // Returns the user key portion of an internal key.
+// 返回内部键的user key部分。
 inline Slice ExtractUserKey(const Slice& internal_key) {
   assert(internal_key.size() >= 8);
   return Slice(internal_key.data(), internal_key.size() - 8);
@@ -154,8 +162,13 @@ class InternalFilterPolicy : public FilterPolicy {
 // Modules in this directory should keep internal keys wrapped inside
 // the following class instead of plain strings so that we do not
 // incorrectly use string comparisons instead of an InternalKeyComparator.
+// 此目录中的模块应该将internal key包装在以下类而不是普通字符串中，
+// 这是为了防止我们错误地使用字符串比较，我们应该使用InternalKeyComparator。
 class InternalKey {
  private:
+  // rep_用于存储InternalKey序列化后的数据,格式如下：
+  // user_key | sequence | type
+  // 由AppendInternalKey()函数生成
   std::string rep_;
 
  public:
@@ -195,6 +208,7 @@ inline bool ParseInternalKey(const Slice& internal_key,
                              ParsedInternalKey* result) {
   const size_t n = internal_key.size();
   if (n < 8) return false;
+  // 从后往前解析，最后8个字节依次存储了sequence和type，sequence是7个字节，type是1个字节。
   uint64_t num = DecodeFixed64(internal_key.data() + n - 8);
   uint8_t c = num & 0xff;
   result->sequence = num >> 8;
@@ -205,7 +219,8 @@ inline bool ParseInternalKey(const Slice& internal_key,
 
 // A helper class useful for DBImpl::Get()
 // 一个有用的辅助类，用于DBImpl::Get()
-// LookUpKey: key本身长度(注意不包括tag)+key本身数据+tag(sequence number)
+// LookUpKey: key本身数据长度(注意不包括tag)+key本身数据+tag(sequence number)
+// 用于在MemTable中查找key。此外,InternalKey是由userkey和tag组成的，没有key_len。
 class LookupKey {
  public:
   // Initialize *this for looking up user_key at a snapshot with

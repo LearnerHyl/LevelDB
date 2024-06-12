@@ -11,6 +11,8 @@ namespace leveldb {
 
 // Tag numbers for serialized VersionEdit.  These numbers are written to
 // disk and should not be changed.
+// VersionEdit序列化时使用的标签号，这些标签号会被写入磁盘，因此不应该被修改。
+// 通过给每个成员变量添加一个Tag，在序列化时可以选择性地序列化某些成员变量，而不必序列化所有成员变量。
 enum Tag {
   kComparator = 1,
   kLogNumber = 2,
@@ -20,6 +22,7 @@ enum Tag {
   kDeletedFile = 6,
   kNewFile = 7,
   // 8 was used for large value refs
+  // 8已经被用于大值引用
   kPrevLogNumber = 9
 };
 
@@ -40,6 +43,7 @@ void VersionEdit::Clear() {
 }
 
 void VersionEdit::EncodeTo(std::string* dst) const {
+  // 每个字段在编码时都会先写入一个标签号，然后写入字段长度，最后写入字段内容。
   if (has_comparator_) {
     PutVarint32(dst, kComparator);
     PutLengthPrefixedSlice(dst, comparator_);
@@ -116,6 +120,8 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
   Slice str;
   InternalKey key;
 
+  // 每次先解析出tag，然后根据tag解析出对应的字段。无论是什么字段，
+  // 存储方式都是field length | field content。
   while (msg == nullptr && GetVarint32(&input, &tag)) {
     switch (tag) {
       case kComparator:

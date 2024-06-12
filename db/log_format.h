@@ -29,6 +29,9 @@ enum RecordType {
 };
 static const int kMaxRecordType = kLastType;
 
+// 一个Block的默认大小为32KB
+// NOTE:注意这里与block_builder.h中的kBlockSize的定义不同，这里是32KB，而block_builder.h中是4KB。
+// 这里的kBlockSize是用来定义log文件中的block的大小的，而block_builder.h中的Block大小
 static const int kBlockSize = 32768;
 
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte).

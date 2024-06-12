@@ -128,7 +128,9 @@ struct LEVELDB_EXPORT Options {
   // 如果启用了压缩，则从磁盘读取的实际单元大小可能会更小。
   // 此参数可以动态更改。
   // 通过进一步阅读后面的源码，可以知道这里指的是data block中data部分的大小，
-  // 不包括compressType和CRC部分的大小。
+  // 不包括compressType和CRC部分的大小。特指SSTable中的data block、index block
+  // 的大小。
+  // 注意与log_format.h中定义的kBlockSize不同，log_format中指的是每次读取log文件的block的大小。
   size_t block_size = 4 * 1024;
 
   // Number of keys between restart points for delta encoding of keys.

@@ -758,6 +758,8 @@ void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
+    // 若存在immutable memtable，则进行minor compaction操作
+    // 将该Immutable MemTable转化为SSTable文件
     CompactMemTable();
     return;
   }
@@ -765,7 +767,9 @@ void DBImpl::BackgroundCompaction() {
   Compaction* c;
   bool is_manual = (manual_compaction_ != nullptr);
   InternalKey manual_end;
+  // 若是手动触发的Compaction操作
   if (is_manual) {
+    // 根据规定的compaction信息，设置一个Compaction对象，用于后续的Compaction操作
     ManualCompaction* m = manual_compaction_;
     c = versions_->CompactRange(m->level, m->begin, m->end);
     m->done = (c == nullptr);
@@ -778,14 +782,17 @@ void DBImpl::BackgroundCompaction() {
         (m->end ? m->end->DebugString().c_str() : "(end)"),
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
+    // 若不是手动触发的Compaction操作，则根据当前的版本信息，让系统自动选择compaction的level和范围。
     c = versions_->PickCompaction();
   }
+  // 到此，c中已经保存了需要进行Compaction操作的信息
 
   Status status;
   if (c == nullptr) {
     // Nothing to do
-  } else if (!is_manual && c->IsTrivialMove()) {
+  } else if (!is_manual && c->IsTrivialMove()) { // 非手动触发的Compaction操作，且是Trivial Move，具体见version_set.cc
     // Move file to next level
+    // 这意味着本次压缩操作只是将一个文件从一个level移动到下一个level，不需要进行文件合并/拆分等操作
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->RemoveFile(c->level(), f->number);

@@ -296,7 +296,7 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
     // 如果有过滤器且键可能存在，则继续查找
-    // 由于一个Block默认为4KB，而默认每2KB数据创建一个filter data，因此一个Data Block一般有
+    // 由于一个Data Block默认为4KB，而默认每2KB数据创建一个filter data，因此一个Data Block一般有
     // 2个filter data，但是这里只会使用第一个filter data,为什么?
     // TODO: 为什么只使用第一个filter data，看完BloomFilter后再回来看
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&

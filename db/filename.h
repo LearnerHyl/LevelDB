@@ -18,13 +18,24 @@ namespace leveldb {
 
 class Env;
 
+/**
+ * LevelDB有两种日志文件，KLogFile负责保存WAL日志，具体的操作日志。
+ * kDescriptorFile也是保存的日志，日志格式与WAL相同，只是Content内容字段
+ * 用于记录每次Compaction操作产生的VersionEdit信息。
+ */
+
 enum FileType {
-  kLogFile,
-  kDBLockFile,
-  kTableFile,
+  kLogFile, // WAL日志文件，文件名为[0-9]+.log
+  kDBLockFile, // db锁文件，文明名为LOCK，通过LOCK文件加文件锁（flock）来实现只有一个实例能操作db
+  kTableFile, // sstable文件，文件名为[0-9]+.sst
+  // db元数据文件，存储系统中version信息，文件名为MANIFEST-[0-9]+，每当db发生compaction时，
+  // 对应的versionedit会记录到descriptor文件中
   kDescriptorFile,
+  // 记录当前使用的descriptor文件名，文件名为CURRENT
   kCurrentFile,
+  // 临时文件，db在修复过程中会产生临时文件，文件名为[0-9]+.dbtmp
   kTempFile,
+  // db运行过程中的日志文件，文件名为LOG
   kInfoLogFile  // Either the current one, or an old one
 };
 
@@ -70,6 +81,9 @@ std::string OldInfoLogFileName(const std::string& dbname);
 // If filename is a leveldb file, store the type of the file in *type.
 // The number encoded in the filename is stored in *number.  If the
 // filename was successfully parsed, returns true.  Else return false.
+// 如果文件名是一个leveldb文件，将文件的类型存储在*type中。
+// 文件名中编码的数字存储在*number中。如果成功解析文件名，则返回true。
+// 否则返回false。
 bool ParseFileName(const std::string& filename, uint64_t* number,
                    FileType* type);
 

@@ -70,6 +70,9 @@ class DBImpl : public DB {
   // Record a sample of bytes read at the specified internal key.
   // Samples are taken approximately once every config::kReadBytesPeriod
   // bytes.
+  // 在指定的内部键处记录读取的字节的样本。查看该key是否存在无效的SSTable读取。
+  // 若存在则更新无效文件的FileMetaData的allowed_seeks字段。是seek compaction的一部分。
+  // 每隔config::kReadBytesPeriod字节左右记录一次样本。
   void RecordReadSample(Slice key);
 
  private:
@@ -78,6 +81,7 @@ class DBImpl : public DB {
   struct Writer;
 
   // Information for a manual compaction
+  // 用于记录手动compaction的信息，会规定level，begin，end等信息。
   struct ManualCompaction {
     int level;
     bool done;

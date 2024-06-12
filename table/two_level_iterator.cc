@@ -205,8 +205,13 @@ void TwoLevelIterator::InitDataBlock() {
 
 }  // namespace
 
+// 两级迭代器适用于两种场景：
+// 1. 在SSTable中, index block iter->data block iter,最终找到指定的key-value
 // 返回一个新的两级迭代器。index_iter是一个index block的迭代器，index block中的每一个kv对中的value
 // 都存储了一个data block在sstable文件中的偏移量。之后block_function将这个value转换为一个data block的迭代器。
+// 2. 在多层Level中，找到指定的file
+// 返回一个新的两级迭代器。index_iter是给定level的迭代器，首先从index iter中获取目标file的文件编号和文件大小，
+// 之后从TableCache中获取该文件的迭代器。具体见LevelFileNumIterator和GetFileIterator。
 Iterator* NewTwoLevelIterator(Iterator* index_iter,
                               BlockFunction block_function, void* arg,
                               const ReadOptions& options) {
