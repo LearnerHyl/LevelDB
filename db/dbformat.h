@@ -164,6 +164,7 @@ class InternalFilterPolicy : public FilterPolicy {
 // incorrectly use string comparisons instead of an InternalKeyComparator.
 // 此目录中的模块应该将internal key包装在以下类而不是普通字符串中，
 // 这是为了防止我们错误地使用字符串比较，我们应该使用InternalKeyComparator。
+// 注意InternalKey在比较时，不仅要比较user key，还要比较sequence number和value type。
 class InternalKey {
  private:
   // rep_用于存储InternalKey序列化后的数据,格式如下：

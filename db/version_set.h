@@ -130,8 +130,15 @@ class Version {
 
   // 在指定的level中查找与[begin, end]重叠的文件，将level层中与[begin, end]重叠的文件存储在inputs中。
   // 若begin为nullptr，则表示在所有key之前。若end为nullptr，则表示在所有key之后。
-  // TODO:这里会特殊处理Level 0层，一旦碰到符合要求的文件，且该文件本身范围包含了[begin, end]，
+  // NOTE:这里会特殊处理Level 0层，一旦碰到符合要求的文件，且该文件本身范围包含了[begin, end]，
   // 那么会将[begin, end]的范围扩大到该文件的范围。我猜这是为了寻找更多的文件，以便进行Compaction。
+  // 在Level0的场景下，最终[begin,end]的范围是所有与[begin,end]重叠的文件的范围的并集。
+  // 
+  // 在Level 0中为什么需要尽可能的合理扩大[begin, end]的范围呢？假设有这样的一种情况：
+  // Level 0中有f1,f2,f3,f4这四个文件，我们首先写了d键，在f1中的序列号为10，然后删除了d键，删除
+  // 操作在f2中的序列号为100，假设compaction操作时只选取了f1，则下次查找d键时会先从level0的f1中找到
+  // 这个结果，但是实际上这个结果是无效的，因为f2中已经删除了d键。所以在level0中需要尽可能的合理扩大
+  // [begin, end]的范围，从而使得compaction操作能够尽可能的多的找到无效的key，从而触发compaction操作。
   void GetOverlappingInputs(
       int level,
       const InternalKey* begin,  // nullptr means before all keys
@@ -237,7 +244,7 @@ class Version {
   // 每当compaction_score_ >= 1时，意味着必须进行Compaction操作。
   // Level0和别的Level计算compaction_score_的方式不同。具体请见VersionSet::Finalize()源码。
   double compaction_score_;
-  // 下一个应该压缩的层级
+  // size_compaction策略下计算出的最需要压缩的层级
   int compaction_level_;
 };
 
@@ -328,8 +335,9 @@ class VersionSet {
   // Returns nullptr if there is no compaction to be done.
   // Otherwise returns a pointer to a heap-allocated object that
   // describes the compaction.  Caller should delete the result.
-  // 为新的Compaction选择级别和输入。如果没有要执行的Compaction，则返回nullptr。
-  // 否则返回指向描述Compaction的堆分配对象的指针。调用者应负责删除结果。
+  // 为新的Compaction选择具体的level，以及level层和level+1层中要参与compaction的文件等等。
+  // 将上述所有信息以Compaction对象的形式返回。如果没有Compaction需要执行，则返回nullptr。
+  // 否则返回一个指向堆分配的对象的指针，该对象描述了Compaction。调用者应负责删除结果。
   Compaction* PickCompaction();
 
   // Return a compaction object for compacting the range [begin,end] in
@@ -338,6 +346,7 @@ class VersionSet {
   // the result.
   // 返回一个Compaction对象，用于在指定级别中压缩范围[begin,end]。
   // 如果该级别中没有与指定范围重叠的内容，则返回nullptr。调用者应负责删除结果。
+  // 该接口用于Manual Compaction，即手动触发Compaction操作。
   Compaction* CompactRange(int level, const InternalKey* begin,
                            const InternalKey* end);
 
@@ -410,6 +419,17 @@ class VersionSet {
                  const std::vector<FileMetaData*>& inputs2,
                  InternalKey* smallest, InternalKey* largest);
 
+  /**
+   * 辅助函数。每当开启一次Compaction操作时，首先通过PickCompaction()函数从current_version中
+   * 判断是否有需要Compaction的层级，若有，获取到需要compaction的level，从Compact_pointer_中
+   * 获取第一个要压缩的文件，之后根据该文件负责的key范围，在level中找到与该文件重叠的文件，这些文件
+   * 就是在level层需要参与Compaction的文件。这些文件会被存储在c->inputs_[0]中。
+   * SetupOtherInputs()函数就是用来设置c->inputs_[1]，即level+1层需要参与Compaction的文件。
+   * 根据已知的c->inputs_[0]，找到level+1层中与c->inputs_[0]重叠的文件，这些文件就是level+1层需要
+   * 参与Compaction的文件。
+   * NOTE:之后还有一次根据上面已经确定的c->inputs_[0]和c->inputs_[1]，尝试在不扩展c->inputs_[1]的文件
+   * 集合的前提下，尽可能的扩展c->inputs_[0]的文件集合，这样可以减少Compaction的次数。
+   */
   void SetupOtherInputs(Compaction* c);
 
   // Save current contents to *log
@@ -451,6 +471,7 @@ class VersionSet {
   // 都会将VersionEdit序列化为Log Record，写入到当前Log文件中。
   // 这种Log文件与WAL Log使用的文件格式是一样的，只是Content内容字段不同。
   // 在LevelDB中，这种Log文件被称为kDescriptorFile文件。
+  // descriptor_log_是descriptor_file_的封装，用于将VersionEdit序列化为Log Record。
   log::Writer* descriptor_log_;
 
   // Head of circular doubly-linked list of versions.
@@ -463,7 +484,7 @@ class VersionSet {
 
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
-  // 每个层级的键，下一个在该层级进行Compaction的键应该从哪里开始。
+  // 每个层级的键，下一个在该层级进行Compaction的键应该从哪里开始，必须大于compact_pointer_[level]记录的键。
   // 可以是一个空字符串，也可以是一个有效的InternalKey，该InternalKey是被序列化后的。
   std::string compact_pointer_[config::kNumLevels];
 };
@@ -476,19 +497,26 @@ class Compaction {
 
   // Return the level that is being compacted.  Inputs from "level"
   // and "level+1" will be merged to produce a set of "level+1" files.
+  // 返回正在压缩的层级。来自“level”和“level+1”的输入将被合并以生成一组“level+1”文件。
   int level() const { return level_; }
 
   // Return the object that holds the edits to the descriptor done
   // by this compaction.
+  // 返回由此次compaction操作完成后而产生的增量信息对象，即VersionEdit对象。
   VersionEdit* edit() { return &edit_; }
 
   // "which" must be either 0 or 1
+  // 返回第"which"个输入文件的数量，因为compaction操作会涉及level_和level_+1两个层级，
+  // 所以which只能是0或1。inputs_[0]表示level_层参与的文件，inputs_[1]表示level_+1层参与的文件。
   int num_input_files(int which) const { return inputs_[which].size(); }
 
   // Return the ith input file at "level()+which" ("which" must be 0 or 1).
+  // 返回“level()+which”中的第i个输入文件（“which”必须是0或1）。0代表level_层的输入文件集合，
+  // 1代表level_+1层的输入文件集合。
   FileMetaData* input(int which, int i) const { return inputs_[which][i]; }
 
   // Maximum size of files to build during this compaction.
+  // 本次compaction操作的最大输出文件大小
   uint64_t MaxOutputFileSize() const { return max_output_file_size_; }
 
   // Is this a trivial compaction that can be implemented by just
@@ -497,19 +525,28 @@ class Compaction {
   bool IsTrivialMove() const;
 
   // Add all inputs to this compaction as delete operations to *edit.
+  // 参与本次compaction操作的所有输入文件，都会compaction操作完成后，作为
+  // 将要被删除的文件，添加到VersionEdit对象中。
   void AddInputDeletions(VersionEdit* edit);
 
   // Returns true if the information we have available guarantees that
   // the compaction is producing data in "level+1" for which no data exists
   // in levels greater than "level+1".
+  // 如果我们当前可用的信息保证compaction操作正在生成“level+1”中的数据，而在大于“level+1”的级别中不存在
+  // 任何与user_key重叠的数据，则返回true。
+  // 本质上是为了判断level+1是否是该user_key的最高层级。
   bool IsBaseLevelForKey(const Slice& user_key);
 
   // Returns true iff we should stop building the current output
   // before processing "internal_key".
+  // 如果我们应该在处理“internal_key”之前停止构建当前输出，则返回true。
+  // 即internal_key与grandparents_中的文件重叠的字节数超过了阈值，需要
+  // 构建新的输出文件。
   bool ShouldStopBefore(const Slice& internal_key);
 
   // Release the input version for the compaction, once the compaction
   // is successful.
+  // 一旦compaction操作成功，就释放compaction的输入版本。
   void ReleaseInputs();
 
  private:
@@ -518,28 +555,48 @@ class Compaction {
 
   Compaction(const Options* options, int level);
 
+  // 本次compaction的层级，即level_和level_+1
   int level_;
+  // 本次compaction的最大输出文件大小
   uint64_t max_output_file_size_;
+  // 本次compaction操作的基础版本
   Version* input_version_;
+  // 本次compaction操作完成后相对于基础版本产生的增量信息，
+  // 基础版本应用该增量信息后，就得到了新的版本。
   VersionEdit edit_;
 
   // Each compaction reads inputs from "level_" and "level_+1"
-  std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs
+  // 每个compaction操作都会从“level_”和“level_+1”读取输入，因此inputs_
+  // 是一个二维数组，inputs_[0]表示level_层参与的文件，inputs_[1]表示level_+1层参与的文件
+  std::vector<FileMetaData*> inputs_[2];
 
   // State used to check for number of overlapping grandparent files
   // (parent == level_ + 1, grandparent == level_ + 2)
-  std::vector<FileMetaData*> grandparents_;
-  size_t grandparent_index_;  // Index in grandparent_starts_
-  bool seen_key_;             // Some output key has been seen
-  int64_t overlapped_bytes_;  // Bytes of overlap between current output
-                              // and grandparent files
+  // 该变量用于检查与某次compaction操作重叠的祖父文件数量(parent == level_ + 1，grandparent == level_ + 2)
+  // 在每次开启compaction之前，在SetupOtherInputs()函数中会初始化该变量。用于ShouldStopBefore()函数。
+  std::vector<FileMetaData*> grandparents_; 
+  // grandparent_index_是grandparents_中的索引，用于指向当前处理的grandparents_中的文件。
+  // 用于ShouldStopBefore()函数。
+  size_t grandparent_index_;
+  // 表示是否已经处理过某些输出键，若为true，则代表已经有一些键被处理过。
+  // 用于跟踪在压缩过程中是否已经遇到任何输出键。用于ShouldStopBefore()函数，
+  // 记录已经处理过的输出键，以便在压缩过程中进行合理的处理。
+  bool seen_key_;
+  // 记录当前输出文件与祖父层文件之间重叠的字节数。用于计算重叠区域的数据量，以便在压缩过程中进行合理的处理。 
+  int64_t overlapped_bytes_;
 
   // State for implementing IsBaseLevelForKey
+  // 用于实现IsBaseLevelForKey的状态
 
   // level_ptrs_ holds indices into input_version_->levels_: our state
   // is that we are positioned at one of the file ranges for each
   // higher level than the ones involved in this compaction (i.e. for
   // all L >= level_ + 2).
+  // level_ptrs_ 数组的每个元素保存 input_version_->levels_ 中的索引。
+  // 这些索引指向在压缩过程中每一层（从 level_ + 2 开始及更高层）的文件范围。
+  // 
+  // 在进行压缩操作时，LevelDB 会涉及多个层次的文件。level_ptrs_ 数组用于跟踪每一层（从 level_ + 2 开始及更高层）当前正在处理的文件位置。
+  // 通过这个数组，IsBaseLevelForKey 方法能够检查给定的键是否在更高层的文件范围内，从而决定是否需要在这些层次中进一步查找。
   size_t level_ptrs_[config::kNumLevels];
 };
 

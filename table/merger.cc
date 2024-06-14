@@ -11,6 +11,10 @@
 namespace leveldb {
 
 namespace {
+// MergingIterator用于将多个子迭代器合并为一个迭代器。并同时保持这些子迭代器中的数据是有序的。本质上是依次遍历每一个子迭代器，
+// 直到找到符合条件的数据，目前发现了如下用途：
+// 1. Compaction中用于将参与合并的level和level+1的两层迭代器合并为一个迭代器。用于归并排序两个level中符合条件的
+//    sstable文件。
 class MergingIterator : public Iterator {
  public:
   MergingIterator(const Comparator* comparator, Iterator** children, int n)
@@ -130,6 +134,7 @@ class MergingIterator : public Iterator {
 
  private:
   // Which direction is the iterator moving?
+  // 迭代器移动的方向是什么？
   enum Direction { kForward, kReverse };
 
   void FindSmallest();
@@ -138,10 +143,15 @@ class MergingIterator : public Iterator {
   // We might want to use a heap in case there are lots of children.
   // For now we use a simple array since we expect a very small number
   // of children in leveldb.
+  // 如果有很多子迭代器，我们可能想使用一个堆。目前我们使用一个简单的数组，因为我们期望在leveldb中有很少的子迭代器。
   const Comparator* comparator_;
+  // 存储所有子迭代器
   IteratorWrapper* children_;
+  // 子迭代器的数量
   int n_;
+  // 当前迭代器的位置
   IteratorWrapper* current_;
+  // 当前迭代器的移动方向，默认为kForward
   Direction direction_;
 };
 

@@ -219,3 +219,32 @@ leveldb中采用了MVCC来避免读写冲突。
 LevelDB的compaction操作实际上是一个递归调用过程，每次对Level n层的compaction操作都会相应改变Level n+1层的文件大小，从而可能再次触发下一层的compaction操作。
 
 BackGroundCompaction函数是执行Compaction操作的入口。
+
+## 文件选取
+
+每次compaction操作之前，若是非手动指定的，需要首先决定参与compaction的层级，之后选取需要参与的文件，最后对选中的文件使用归并排序生成一个新文件。决定层级level、level+1以及选取level中参与文件的方法为VersionSet中的pickCompaction方法，PickCompaction方法返回的是一个Comapction实例，该实例中包含了本次compaction操作的相关信息。
+
+size compaction的优先级要高于seek compaction，我们更喜欢由于某个level中的数据过多而触发的compaction操作，这是compaction在设计时的理念之一。
+
+每一层中，要参与压缩的文件，以compact_pointer_为基础信息获取到的文件为准，与该文件的key范围重合的要参与；下一步，在上述文件集合基础上，在当前层中，是该集合文件的边界文件的文件也要参与。每次compaction操作时，level和level+1层的参与compaction的文件就是这么确定的。
+
+> 边界文件：从compaction_files中提取最大的文件b1，然后在level_files中搜索一个文件b2，其中user_key(u1) = user_key(l2)，即b1文件的最大key的user_key等于b2文件的最小key的user_key。如果找到这样的文件b2(称为边界文件)，则将其添加到compaction_files中，然后使用这个新的上界再次搜索。
+>
+> 如果有两个块，b1=(l1, u1)和b2=(l2, u2)，并且user_key(u1) = user_key(l2)，如果我们压缩b1但不压缩b2，那么后续的get操作将产生错误的结果，因为它将从level i中的b2而不是b1中返回记录，因为它会逐级搜索与提供的user key匹配的记录。这样会丢失一部分更改，导致数据不完整。
+>
+> 简单来说，边界文件的最小key一般大于当前文件集合的最大key，但是两者的user_key部分一定是相等的。
+
+### optimization：尝试进一步扩大Level层参与压缩文件数量
+
+当我们初步的获取到了level层和level+1层要参与本次compaction操作的文件集合后，可以根据这两个文件集合的key范围，进一步的尝试扩大level层参与压缩的文件集合。
+
+ 判断我们是否可以增加level层的输入文件数量，而不改变我们选择的level+1层文件的数量。 在上面，我们获取了level层和level+1层的所有文件的key范围，现在根据该key范围，我们尝试是否可以进一步的扩展level层的输入文件数量，而不改变level+1层的文件数量。
+
+如果扩展后的Level 层文件集合导致Level +1层文件集合的数量增加，就不能应用这次扩展，**因为本次扩展后的comapction操作会导致level +1层出现key重叠的文件**。这是因为在LevelDB中，不同层级的文件之间的键范围可以重叠，但同一层级的文件之间不能有重叠（只有level0会出现同一层的文件key重叠）。
+
+> TODO：这里还是有些疑问，不知道为什么会导致level +1层会出现key重叠的文件。
+
+具体见VersionSet::SetupOtherInputs方法中的逻辑。
+
+## 执行流程
+

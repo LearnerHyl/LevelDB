@@ -793,11 +793,14 @@ void DBImpl::BackgroundCompaction() {
   } else if (!is_manual && c->IsTrivialMove()) { // 非手动触发的Compaction操作，且是Trivial Move，具体见version_set.cc
     // Move file to next level
     // 这意味着本次压缩操作只是将一个文件从一个level移动到下一个level，不需要进行文件合并/拆分等操作
+    // 本次compaction的Level-0层只允许有一个参与compaction的文件
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
+    // 将文件f从level-0层移动到level-1层，直接操作即可，不需要进行文件合并/拆分等操作
     c->edit()->RemoveFile(c->level(), f->number);
     c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
                        f->largest);
+    // 将产生的version edit应用到当前版本中，产生新的版本
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
