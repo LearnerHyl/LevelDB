@@ -285,7 +285,7 @@ class VersionSet {
   uint64_t ManifestFileNumber() const { return manifest_file_number_; }
 
   // Allocate and return a new file number
-  // 分配并返回一个新的文件号，用于新创建的MANIFEST文件
+  // 分配并返回一个新的文件号。用于分配新的SSTable文件的文件号。
   uint64_t NewFileNumber() { return next_file_number_++; }
 
   // Arrange to reuse "file_number" unless a newer file number has
@@ -546,7 +546,7 @@ class Compaction {
 
   // Release the input version for the compaction, once the compaction
   // is successful.
-  // 一旦compaction操作成功，就释放compaction的输入版本。
+  // 一旦compaction操作成功，就释放对compaction的输入版本的引用。
   void ReleaseInputs();
 
  private:

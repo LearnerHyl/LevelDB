@@ -210,6 +210,10 @@ leveldb中采用了MVCC来避免读写冲突。
 
 在进行compaction操作时，为了不影响LevelDB中kv对的写入，会使用一个单独的线程执行Compaction，执行过程如下：首先选定本次compaction操作需要参与的文件，然后使用归并排序将所有参与文件中的数据排序后输出到新的文件之中，最后将本次的变更情况生成VersionEdit文件，将其序列化为Log Record存入到MANIFEST文件中，最后通过builder将versionedit应用于当前版本，生成最新的版本，代表compaction操作后各层文件情况。
 
+LevelDB中Compaction具有优先级，其顺序为：Minor Compaction > Manual Compaction > Size Compaction > Seek Compaction。无论是Minor Compaction还是Major Compaction，在设置了相应的参数后，都会通过`DBImpl::MaybeScheduleCompaction`方法来判断是否需要执行Compaction。
+
+读这部分之前，确保已经完成了version、versionedit、versionSet、Compaction部分的源码阅读。
+
 ## 触发时机
 
 `size compaction`：当内存中的memtable写入超出限制后，则会将当前memtable转化为immutable memtable，通过minor compaction生成一个SSTable，并将其写入到Level 0之中，此时Level0的文件数量若超过限制，则会触发size compaction策略。
@@ -218,7 +222,7 @@ leveldb中采用了MVCC来避免读写冲突。
 
 LevelDB的compaction操作实际上是一个递归调用过程，每次对Level n层的compaction操作都会相应改变Level n+1层的文件大小，从而可能再次触发下一层的compaction操作。
 
-BackGroundCompaction函数是执行Compaction操作的入口。
+BackGroundCompaction函数是执行Compaction操作的入口。所有的逻辑都从这个函数开始，因此要详细了解Compaction操作的流程，从该函数开始去逐步的深入源码，是非常合适的。
 
 ## 文件选取
 
@@ -246,5 +250,52 @@ size compaction的优先级要高于seek compaction，我们更喜欢由于某�
 
 具体见VersionSet::SetupOtherInputs方法中的逻辑。
 
-## 执行流程
+## 执行流程（难，有问题）
 
+BackGroundCompaction函数中有对所有类型Compaction操作的调度逻辑，是整体流程，着重阅读了需要进行文件合并拆分的compaction操作流程，核心函数是DoCompactionWork。
+
+Compaction操作的执行流程具体在DBImpl::DoCompactionWork函数中实现，结合源码理解。 首先要知道每个DBImpl实例中都会有自己的快照列表，本质上每个快照对象都封装了一个sequencenumber时间戳，每次compaction操作开始前都需要指定一个最小快照对象，小于等于最小快照中的时间戳的kv操作都不会被计入到compaction操作的输出文件中去。
+
+难点在于DoCompaction中的一段逻辑，我对这里的一个特殊情况不是特别了解，可能需要后面从全局上理顺逻辑后，这里就会理解了，先挖个坑：
+
+```c++
+// 若不是第一次见关于该user key的kv对，则比较最近见到的kv对(不包括当前kv对)的操作序列号)与
+      // 本次compaction操作的最小快照，若小于等于最小快照，则当前kv对不需要写入到输出文件中
+      // 考虑对key1的操作，smallest=100,第一次操作是操作为100的insert，根据代码逻辑，操作是一定会成功的。
+      // 第二次操作为101，无论类型是什么，因为第一次操作为100, 根据下述逻辑，第二次操作会被drop掉。
+      // 若还有第三次操作103，那么第三次操作会成功，因为第二次操作的seq大于smallest。
+      // 这不会影响到最终查询结果，因为我们永远不会服务一个小于smallest的快照，因此100的insert是无效的，所以我们看不到这个数据。
+      // 若第二次是delete，虽然他会被drop掉，但是结果是一样的。若第二次是insert，那么会暂时有不一致性，但是这个不一致性是中间状态。
+      // 第三次一定会成功，所以从第三次开始，数据就会即时进入builder中。当次数大于3时，数据没问题，但是次数为2时，数据会被drop掉。
+      // 问题在于，若只有两次操作，第一次是insert，第二次还是insert，那么第二次会被drop掉，这是不是就意味着数据丢失了呢？
+      // FIXME:当某个user_key只有两次操作，且第一次操作等于smallest，第二次操作为insert时，第二次操作会被drop掉，这样会导致数据丢失。
+      if (last_sequence_for_key <= compact->smallest_snapshot) {
+        // Hidden by an newer entry for same user key
+        // 之前遍历到了一个版本号小于当前版本号的kv对，丢弃，之后会有一个更新的kv对覆盖它
+        drop = true;  // (A)
+      } else if (ikey.type == kTypeDeletion &&
+                 ikey.sequence <= compact->smallest_snapshot &&
+                 compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
+        // 若当前kv对是一个删除操作，且其操作序列号小于等于compact->smallest_snapshot，
+        // 且该kv对的user key的最早版本在level+1层中,即更高层不会再有关于该键的操作出现，
+        // 那么该kv对不需要写入到输出文件中。
+        // For this user key:
+        // (1) there is no data in higher levels
+        // (2) data in lower levels will have larger sequence numbers
+        // (3) data in layers that are being compacted here and have
+        //     smaller sequence numbers will be dropped in the next
+        //     few iterations of this loop (by rule (A) above).
+        // Therefore this deletion marker is obsolete and can be dropped.
+        // 对于该user_key而言:
+        // (1) 除了当前level，在更高的level中没有该user_key的数据
+        // (2) 在更低的level中有更大的操作序列号
+        // (3) 根据规则(A)可知，在这里被compaction的level中，有更小操作序列号的数据将在接下来的几次迭代中被删除。
+        // 因此，这个删除标记是过时的，可以被删除。
+        drop = true;
+      }
+
+```
+
+## 文件清理
+
+在compaction操作完成后，会产生一些新的输出文件，同时也会有一些文件可以被删除，具体请见RemoveObsoleteFiles()函数，涉及到了WAL日志文件，MANIFEST文件,SSTable文件等等。

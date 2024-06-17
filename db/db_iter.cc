@@ -45,6 +45,9 @@ class DBIter : public Iterator {
   //     the exact entry that yields this->key(), this->value()
   // (2) When moving backwards, the internal iterator is positioned
   //     just before all entries whose user key == this->key().
+  // 迭代器当前移动的方向是什么？
+  // (1) 向前移动时，内部迭代器定位在产生this->key(), this->value()的确切条目上。
+  // (2) 向后移动时，内部迭代器定位在所有user key == this->key()的条目之前。
   enum Direction { kForward, kReverse };
 
   DBIter(DBImpl* db, const Comparator* cmp, Iterator* iter, SequenceNumber s,

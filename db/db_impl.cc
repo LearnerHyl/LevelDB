@@ -53,14 +53,17 @@ struct DBImpl::Writer {
   port::CondVar cv;  // 条件变量,用于等待写入完成
 };
 
+// 保存Compaction操作结果的统计信息
 struct DBImpl::CompactionState {
   // Files produced by compaction
+  // Compaction操作产生的输出文件
   struct Output {
     uint64_t number;
     uint64_t file_size;
     InternalKey smallest, largest;
   };
 
+  // 获取当前Compaction操作正在处理的输出文件
   Output* current_output() { return &outputs[outputs.size() - 1]; }
 
   explicit CompactionState(Compaction* c)
@@ -70,20 +73,29 @@ struct DBImpl::CompactionState {
         builder(nullptr),
         total_bytes(0) {}
 
+  // Compaction对象，用于描述本次compaction操作的相关信息，
+  // 如目标level，level和level+1层参与compaction的文件等
   Compaction* const compaction;
 
   // Sequence numbers < smallest_snapshot are not significant since we
   // will never have to service a snapshot below smallest_snapshot.
   // Therefore if we have seen a sequence number S <= smallest_snapshot,
   // we can drop all entries for the same key with sequence numbers < S.
+  // 小于smallest_snapshot的序列号不重要，因为我们永远不会服务于小于smallest_snapshot的快照。
+  // 因此，如果我们看到一个序列号S <= smallest_snapshot，我们可以删除所有具有序列号<S的相同user_key的条目。
+  // 用于记录当前Compaction操作的最小序列号。快照本质上是一个序列号，表示在这个序列号之前的所有操作都已经完成。
   SequenceNumber smallest_snapshot;
 
+  // 保存本次Compaction操作产生的所有输出文件
   std::vector<Output> outputs;
 
   // State kept for output being generated
+  // 用于生成输出文件的状态，构建出SSTable对象后，需要将其写入到磁盘文件中
   WritableFile* outfile;
+  // 将compaction操作的输出文件构建为SSTable文件的TableBuilder对象
   TableBuilder* builder;
 
+  // 本次Compaction操作产生的总字节数
   uint64_t total_bytes;
 };
 
@@ -234,33 +246,42 @@ void DBImpl::RemoveObsoleteFiles() {
   }
 
   // Make a set of all of the live files
+  // 创建一个存储所有存活文件编号的集合
   std::set<uint64_t> live = pending_outputs_;
   versions_->AddLiveFiles(&live);
 
   std::vector<std::string> filenames;
+  // 将数据库目录下的所有文件名存储到filenames中
   env_->GetChildren(dbname_, &filenames);  // Ignoring errors on purpose
-  uint64_t number;
-  FileType type;
-  std::vector<std::string> files_to_delete;
+  uint64_t number; // 文件序列号
+  FileType type; // 文件类型
+  std::vector<std::string> files_to_delete; // 保存可以删除的文件名
   for (std::string& filename : filenames) {
     if (ParseFileName(filename, &number, &type)) {
       bool keep = true;
       switch (type) {
         case kLogFile:
+          // 对于记录kv操作的WAL文件，只保留最新的WAL文件和PrevLogNumber对应的WAL文件，
+          // 删除文件序列号小于log_number_并且不等于prev_log_number_的WAL文件
           keep = ((number >= versions_->LogNumber()) ||
                   (number == versions_->PrevLogNumber()));
           break;
         case kDescriptorFile:
           // Keep my manifest file, and any newer incarnations'
           // (in case there is a race that allows other incarnations)
+          // 保留当前最新的MANIFEST文件，以及任何更新的MANIFEST文件（以防存在允许其他版本的竞争）
+          // 当前正在使用的MANIFEST文件就是我们需要的最旧的MANIFEST文件
           keep = (number >= versions_->ManifestFileNumber());
           break;
         case kTableFile:
+          // SSTable文件，只要不在live集合中的SSTable文件都可以删除。
+          // 即没有参与当前的Compaction操作且不在活跃的版本中的SSTable文件都可以删除。
           keep = (live.find(number) != live.end());
           break;
         case kTempFile:
           // Any temp files that are currently being written to must
           // be recorded in pending_outputs_, which is inserted into "live"
+          // 任何当前正在写入的临时文件都必须记录在pending_outputs_中，这些文件会被插入到“live”中。
           keep = (live.find(number) != live.end());
           break;
         case kCurrentFile:
@@ -271,8 +292,9 @@ void DBImpl::RemoveObsoleteFiles() {
       }
 
       if (!keep) {
+        // 更新files_to_delete，将可以删除的文件名加入到files_to_delete中，
         files_to_delete.push_back(std::move(filename));
-        if (type == kTableFile) {
+        if (type == kTableFile) { // 将可以删除的SSTable文件从table_cache_中删除
           table_cache_->Evict(number);
         }
         Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
@@ -487,10 +509,10 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
     }
 
     // 如果MemTable的内存使用量超过了设定的阈值，会触发MemTable的Compaction操作，将MemTable转化为SSTable
-    // TODO:后面会专门分析这块代码
     if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) {
       compactions++;
       *save_manifest = true;
+      // 执行minor compaction操作，将MemTable转化为SSTable
       status = WriteLevel0Table(mem, edit, nullptr);
       mem->Unref();
       mem = nullptr;
@@ -554,16 +576,17 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   // 每个MemTable对应一个SSTable文件，生成一个新的SSTable文件序号
   meta.number = versions_->NewFileNumber();
   pending_outputs_.insert(meta.number);
-  // 生成当前memtable的迭代器，本质上是调用底层的SkipList的迭代器
+  // 生成当前memtable的迭代器，本质上是调用底层的SkipList的迭代器，
+  // 遍历当前immutable memtable中的所有kv对
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
 
   Status s;
   {
+    // I/O操作开始后，释放锁，允许其他线程继续操作
     mutex_.Unlock();
-    // 将memtable中的数据写入到SSTable文件中
-    // I/O操作开始后，就释放锁，允许其他线程继续操作
+    // 根据，传入的memtable迭代器，生成一个新的SSTable文件
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
@@ -576,17 +599,22 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
 
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
+  // 如果file_size为零，则文件已被删除，不应将其添加到manifest中。
   int level = 0;
   if (s.ok() && meta.file_size > 0) {
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
+      // 根据由minor compaction操作新生成的SSTable文件的最小和最大user_key，选择该SSTable
+      // 文件应该被放置在哪个level中
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
+    // 在VersionEdit对象的对应level中记录该SSTable文件的元数据信息
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest);
   }
 
+  // 记录本次Compaction操作的统计信息，并加入到相应的level中
   CompactionStats stats;
   stats.micros = env_->NowMicros() - start_micros;
   stats.bytes_written = meta.file_size;
@@ -599,9 +627,11 @@ void DBImpl::CompactMemTable() {
   assert(imm_ != nullptr);
 
   // Save the contents of the memtable as a new Table
+  // 对于minor compaction，同样是用current_version+versionEdit的方法来记录compaction操作
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
+  // 开始执行minor compaction，将imm_中的数据写入到SSTable文件中
   Status s = WriteLevel0Table(imm_, &edit, base);
   base->Unref();
 
@@ -753,7 +783,6 @@ void DBImpl::BackgroundCall() {
   MaybeScheduleCompaction();
   background_work_finished_signal_.SignalAll();
 }
-
 void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
@@ -810,14 +839,19 @@ void DBImpl::BackgroundCompaction() {
         static_cast<unsigned long long>(f->number), c->level() + 1,
         static_cast<unsigned long long>(f->file_size),
         status.ToString().c_str(), versions_->LevelSummary(&tmp));
-  } else {
+  } else { // 非Trivial Move，需要进行文件合并/拆分等操作;
+    // 新建CompactionState对象，用于保存Compaction操作的状态信息
     CompactionState* compact = new CompactionState(c);
+    // 执行Compaction操作
     status = DoCompactionWork(compact);
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
+    // 释放CompactionState对象内存
     CleanupCompaction(compact);
+    // 释放对本次compaction操作中的版本信息的引用
     c->ReleaseInputs();
+    // 删除任何不再需要的文件和过时的内存条目
     RemoveObsoleteFiles();
   }
   delete c;
@@ -847,6 +881,7 @@ void DBImpl::BackgroundCompaction() {
 
 void DBImpl::CleanupCompaction(CompactionState* compact) {
   mutex_.AssertHeld();
+  // 若CompactionState对象中的builder对象不为空，则放弃该builder对象
   if (compact->builder != nullptr) {
     // May happen if we get a shutdown call in the middle of compaction
     compact->builder->Abandon();
@@ -854,11 +889,14 @@ void DBImpl::CleanupCompaction(CompactionState* compact) {
   } else {
     assert(compact->outfile == nullptr);
   }
+  // 删除compact对象中的outfile对象，是SSTable文件的输出文件的内存形式
   delete compact->outfile;
+  // 清空pending_outputs_中的compact对象中的输出文件编号，因为这些文件已经写入磁盘了
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     pending_outputs_.erase(out.number);
   }
+  // 删除compact对象
   delete compact;
 }
 
@@ -867,11 +905,14 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact->builder == nullptr);
   uint64_t file_number;
   {
+    // 访问元数据时需要加锁
     mutex_.Lock();
+    // 生成一个新的SSTable文件序号
     file_number = versions_->NewFileNumber();
     pending_outputs_.insert(file_number);
     CompactionState::Output out;
     out.number = file_number;
+    // 更新CompactionState对象中的outputs信息
     out.smallest.Clear();
     out.largest.Clear();
     compact->outputs.push_back(out);
@@ -879,9 +920,12 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   }
 
   // Make the output file
+  // 将新生成的SSTable文件打开，compact->outfile指向该文件
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
+    // 若上述操作都成功了，为该SSTable文件生成一个builder对象，用于在outfile对象上按照
+    // SSTable文件的格式构造SSTable文件
     compact->builder = new TableBuilder(options_, compact->outfile);
   }
   return s;
@@ -893,17 +937,22 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   assert(compact->outfile != nullptr);
   assert(compact->builder != nullptr);
 
+  // 当前正在处理的文件序列号
   const uint64_t output_number = compact->current_output()->number;
   assert(output_number != 0);
 
   // Check for iterator errors
   Status s = input->status();
+  // 获取当前builder对象中已经写入的kv对数量
   const uint64_t current_entries = compact->builder->NumEntries();
   if (s.ok()) {
+    // 将当前已经遍历完毕的kv对写入到SSTable文件中
     s = compact->builder->Finish();
   } else {
+    // 如果在遍历过程中出现错误，则放弃当前builder对象
     compact->builder->Abandon();
   }
+  // 上面Finish()函数生成的SSTable文件的大小
   const uint64_t current_bytes = compact->builder->FileSize();
   compact->current_output()->file_size = current_bytes;
   compact->total_bytes += current_bytes;
@@ -911,6 +960,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   compact->builder = nullptr;
 
   // Finish and check for file errors
+  // 将SSTable文件刷入磁盘
   if (s.ok()) {
     s = compact->outfile->Sync();
   }
@@ -920,8 +970,10 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   delete compact->outfile;
   compact->outfile = nullptr;
 
+  // 若写入成功，则打印日志
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
+    // 若当前SSTable文件写入成功，则将其加入到table_cache_中，方便后面访问
     Iterator* iter =
         table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
     s = iter->status();
@@ -936,6 +988,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   return s;
 }
 
+// 将CompactState对象中的待删除的输入文件和新生成的文件同步到VersionEdit对象中。
+  // 最后调用VersionSet对象的LogAndApply方法将VersionEdit对象中的变更应用到当前的Version对象中。
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   mutex_.AssertHeld();
   Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
@@ -944,18 +998,24 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
       static_cast<long long>(compact->total_bytes));
 
   // Add compaction outputs
+  // 本次参与compaction的输入文件在compaction操作完成后要被删除
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
+  // 将compaction操作生成的SSTable文件加入到VersionEdit对象中，这些文件在新版本中都会被放到level+1层
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
   }
+  // 到此version edit中已经记录了compaction操作的结果，接下来将其应用到当前版本中
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
 
+// 当compaction对象构造完毕后，调用DoCompactionWork()函数执行compaction操作，
+// 该函数是真正执行compaction操作的入口函数，主要实现了Major Compaction的逻辑。
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
+  // 用于记录minor compaction操作的耗时
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",
@@ -963,41 +1023,62 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       compact->compaction->num_input_files(1),
       compact->compaction->level() + 1);
 
+  // 很明显，compaction操作被执行前，首先目标level必须有文件，builder对象和outfile对象必须为空
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
+  // 不能有用于apply version edit的builder对象，因为操作还未开始
   assert(compact->builder == nullptr);
+  // 不能有compaction输出文件
   assert(compact->outfile == nullptr);
+  // 为当前compaction操作设置最小快照，即最小的操作序列号，其实每个快照对象
+  // 本质上只是封装了一个操作序列号-SequenceNumber
+  // NOTE:这里的逻辑对理解下面的过滤kv操作的原理很重要
   if (snapshots_.empty()) {
+    // 若当前数据库中没有快照记录，则最小快照为当前版本中的最大操作序列号
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
+    // 若当前数据库中有快照，则获取最旧的快照的操作序列号
     compact->smallest_snapshot = snapshots_.oldest()->sequence_number();
   }
 
+  // 返回一个MergeIterator对象，用于有序遍历level和level+1层文件中的所有kv对
   Iterator* input = versions_->MakeInputIterator(compact->compaction);
 
   // Release mutex while we're actually doing the compaction work
+  // 释放锁，以便在执行compaction操作时，其他线程可以继续操作
   mutex_.Unlock();
-
+  // 开始执行compaction操作
   input->SeekToFirst();
   Status status;
   ParsedInternalKey ikey;
   std::string current_user_key;
   bool has_current_user_key = false;
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+  // 遍历level和level+1层文件中的所有kv对
+  // 若input->Valid()为true；且shutting_down_为false，则继续遍历
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
+    // 无论当前处理的是哪一层的文件，都优先处理immutable memtable的compaction操作，即先执行minor compaction操作
+    // 优先处理immutable memtable的compaction操作，即先执行minor compaction操作
     if (has_imm_.load(std::memory_order_relaxed)) {
       const uint64_t imm_start = env_->NowMicros();
+      // 在执行minor compaction操作期间，需要持有mutex_锁，以保证compaction操作的正确性
       mutex_.Lock();
       if (imm_ != nullptr) {
+        // 执行minor compaction操作，将imm_中的数据写入到SSTable文件
         CompactMemTable();
         // Wake up MakeRoomForWrite() if necessary.
+        // 唤醒MakeRoomForWrite()函数中由于Level0层文件数量过多而阻塞的线程
         background_work_finished_signal_.SignalAll();
       }
       mutex_.Unlock();
+      // 记录minor compaction操作的耗时
       imm_micros += (env_->NowMicros() - imm_start);
     }
 
+    // 处理本次compaction操作的kv对
     Slice key = input->key();
+    // 若发现到当前key后，当前compaction操作已经遍历过的kv对与grandparent level中的存在kv重叠
+    // 文件的总字节数超过了设定的阈值，则停止当前compaction操作，马上生成输出文件，以减少重叠文件的数量
     if (compact->compaction->ShouldStopBefore(key) &&
         compact->builder != nullptr) {
       status = FinishCompactionOutputFile(compact, input);
@@ -1007,28 +1088,47 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     }
 
     // Handle key/value, add to state, etc.
-    bool drop = false;
-    if (!ParseInternalKey(key, &ikey)) {
+    // 处理当前kv对，将其添加到builder对象中
+    bool drop = false; // 用于判断一个kv对是否可以删除，若为true，则该kv对不需要写入到输出文件中
+    if (!ParseInternalKey(key, &ikey)) { // 解析当前kv对的InternalKey，若解析失败，则直接跳过
       // Do not hide error keys
       current_user_key.clear();
       has_current_user_key = false;
       last_sequence_for_key = kMaxSequenceNumber;
     } else {
+      // 如果这是遍历的第一个kv对，或者当前kv对的user key与上一个kv对的user key不同，
+      // 说明该kv对中的user key是第一次出现
       if (!has_current_user_key ||
           user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) !=
               0) {
         // First occurrence of this user key
+        // 更新current_user_key内容
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;
+        // 更新最后一次见到的该user key的操作序列号，第一次遇到该user_key时，将其设置为kMaxSequenceNumber
         last_sequence_for_key = kMaxSequenceNumber;
       }
 
+      // 若不是第一次见关于该user key的kv对，则比较最近见到的kv对(不包括当前kv对)的操作序列号)与
+      // 本次compaction操作的最小快照，若小于等于最小快照，则当前kv对不需要写入到输出文件中
+      // 考虑对key1的操作，smallest=100,第一次操作是操作为100的insert，根据代码逻辑，操作是一定会成功的。
+      // 第二次操作为101，无论类型是什么，因为第一次操作为100, 根据下述逻辑，第二次操作会被drop掉。
+      // 若还有第三次操作103，那么第三次操作会成功，因为第二次操作的seq大于smallest。
+      // 这不会影响到最终查询结果，因为我们永远不会服务一个小于smallest的快照，因此100的insert是无效的，所以我们看不到这个数据。
+      // 若第二次是delete，虽然他会被drop掉，但是结果是一样的。若第二次是insert，那么会暂时有不一致性，但是这个不一致性是中间状态。
+      // 第三次一定会成功，所以从第三次开始，数据就会即时进入builder中。当次数大于3时，数据没问题，但是次数为2时，数据会被drop掉。
+      // 问题在于，若只有两次操作，第一次是insert，第二次还是insert，那么第二次会被drop掉，这是不是就意味着数据丢失了呢？
+      // FIXME:当某个user_key只有两次操作，且第一次操作等于smallest，第二次操作为insert时，第二次操作会被drop掉，这样会导致数据丢失。
       if (last_sequence_for_key <= compact->smallest_snapshot) {
         // Hidden by an newer entry for same user key
+        // 之前遍历到了一个版本号小于当前版本号的kv对，丢弃，之后会有一个更新的kv对覆盖它
         drop = true;  // (A)
       } else if (ikey.type == kTypeDeletion &&
                  ikey.sequence <= compact->smallest_snapshot &&
                  compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
+        // 若当前kv对是一个删除操作，且其操作序列号小于等于compact->smallest_snapshot，
+        // 且该kv对的user key的最早版本在level+1层中,即更高层不会再有关于该键的操作出现，
+        // 那么该kv对不需要写入到输出文件中。
         // For this user key:
         // (1) there is no data in higher levels
         // (2) data in lower levels will have larger sequence numbers
@@ -1036,9 +1136,15 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         //     smaller sequence numbers will be dropped in the next
         //     few iterations of this loop (by rule (A) above).
         // Therefore this deletion marker is obsolete and can be dropped.
+        // 对于该user_key而言:
+        // (1) 除了当前level，在更高的level中没有该user_key的数据
+        // (2) 在更低的level中有更大的操作序列号
+        // (3) 根据规则(A)可知，在这里被compaction的level中，有更小操作序列号的数据将在接下来的几次迭代中被删除。
+        // 因此，这个删除标记是过时的，可以被删除。
         drop = true;
       }
 
+      // 更新我们见到的当前key的最大操作序列号
       last_sequence_for_key = ikey.sequence;
     }
 #if 0
@@ -1051,65 +1157,81 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         (int)last_sequence_for_key, (int)compact->smallest_snapshot);
 #endif
 
+    // 若该kv对需要被添加到输出文件中，则将其添加到builder对象中
     if (!drop) {
       // Open output file if necessary
+      // 若builder对象为空，则打开一个新的SSTable文件,并将builder指向该文件
       if (compact->builder == nullptr) {
         status = OpenCompactionOutputFile(compact);
         if (!status.ok()) {
           break;
         }
       }
+      // 若当前key是该compaction操作处理的第一个key，则将其设置为当前输出文件的最小key
       if (compact->builder->NumEntries() == 0) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
+      // 将kv对添加到builder对象中，并不断地更新当前输出文件的最大key
       compact->current_output()->largest.DecodeFrom(key);
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough
+      // 若当前输出文件的大小超过了设定的阈值，则将其写入到磁盘中
       if (compact->builder->FileSize() >=
           compact->compaction->MaxOutputFileSize()) {
+        // 阶段性地将当前输出的SSTable文件写入到磁盘中
         status = FinishCompactionOutputFile(compact, input);
         if (!status.ok()) {
           break;
         }
       }
     }
-
+    // 继续遍历下一个kv对
     input->Next();
   }
 
   if (status.ok() && shutting_down_.load(std::memory_order_acquire)) {
     status = Status::IOError("Deleting DB during compaction");
   }
+  // 若遍历完毕，但是当前输出文件中还有kv对，则将其以文件的形式写入到磁盘中
   if (status.ok() && compact->builder != nullptr) {
     status = FinishCompactionOutputFile(compact, input);
   }
   if (status.ok()) {
     status = input->status();
   }
+  // 处理完毕，删除input对象
   delete input;
   input = nullptr;
 
+  // 若compaction操作成功，则记录compaction操作的统计信息
   CompactionStats stats;
+  // 记录compaction操作的耗时
   stats.micros = env_->NowMicros() - start_micros - imm_micros;
+  // 记录本次compaction操作输入文件的总的字节数
   for (int which = 0; which < 2; which++) {
     for (int i = 0; i < compact->compaction->num_input_files(which); i++) {
       stats.bytes_read += compact->compaction->input(which, i)->file_size;
     }
   }
+  // 记录本次compaction操作产生的所有输出文件的总的字节数
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     stats.bytes_written += compact->outputs[i].file_size;
   }
 
   mutex_.Lock();
+  // 更新compaction操作的统计信息，本次compaction操作会被记录到level+1层
   stats_[compact->compaction->level() + 1].Add(stats);
 
+  // 将待删除的文件和新生成的文件同步到VersionEdit对象中，并通过调用
+  // VersionSet对象的LogAndApply方法将VersionEdit对象中的变更应用到当前的Version对象中
   if (status.ok()) {
     status = InstallCompactionResults(compact);
   }
   if (!status.ok()) {
     RecordBackgroundError(status);
   }
+  // 打印compaction操作的统计信息，完成本次compaction操作
   VersionSet::LevelSummaryStorage tmp;
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
   return status;
@@ -1463,7 +1585,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // 若是非强制写入，并且当前memtable的内存使用量小于write_buffer_size，说明仍有足够的空间进行写入
       // There is room in current memtable
       break;
-    } else if (imm_ != nullptr) {  // 是否有正在进行的compact操作的imm_
+    } else if (imm_ != nullptr) {  // 是否有正在进行的compact操作的imm_，minor compaction操作
       // We have filled up the current memtable, but the previous
       // one is still being compacted, so we wait.
       // 当前的mem_已经被写满，但是不可变的mem_仍在被压缩，因此需要等待压缩完毕后，才能交换imm_和mem_的内存
@@ -1471,7 +1593,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       background_work_finished_signal_.Wait();
     } else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
       // There are too many level-0 files.
-      // L0层文件太多，需要等待后台的compact操作完成,因此这里后台写入线程需要等待
+      // L0层文件数量过多，等待，这里会被完成的minor compaction操作唤醒1
       Log(options_.info_log, "Too many L0 files; waiting...\n");
       background_work_finished_signal_.Wait();
     } else {  // 到此，说明当前的memtable已经写满，且没有正在进行的compact操作，且L0层的文件数量没有超过阈值，因此需要进行compact操作
@@ -1513,7 +1635,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       logfile_ = lfile;
       logfile_number_ = new_log_number;
       log_ = new log::Writer(lfile);
-      imm_ = mem_;  // 将旧的memtable设置为不可变的memtable，启动compact操作
+      imm_ = mem_;  // 将旧的memtable设置为不可变的memtable，启动minor compaction操作
       has_imm_.store(true, std::memory_order_release);
       mem_ = new MemTable(internal_comparator_);
       mem_->Ref();

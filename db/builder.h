@@ -22,6 +22,8 @@ class VersionEdit;
 // *meta will be filled with metadata about the generated table.
 // If no data is present in *iter, meta->file_size will be set to
 // zero, and no Table file will be produced.
+// 从*iter的内容(KV操作)构建一个Table文件。生成的文件将根据meta->number命名。成功后，*meta的其余部分将填充关于生成的SSTable表的元数据。
+// 如果*iter中没有数据，则meta->file_size将设置为零，并且不会生成Table文件。
 Status BuildTable(const std::string& dbname, Env* env, const Options& options,
                   TableCache* table_cache, Iterator* iter, FileMetaData* meta);
 

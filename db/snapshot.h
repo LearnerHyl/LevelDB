@@ -15,7 +15,8 @@ class SnapshotList;
 // Snapshots are kept in a doubly-linked list in the DB.
 // Each SnapshotImpl corresponds to a particular sequence number.
 // 快照在DB中以双向链表的形式保存。
-// 每个SnapshotImpl对应一个特定的序列号。
+// 每个SnapshotImpl对应一个特定的序列号，即一个kv操作的序列号/时间戳。
+// 可以认为每个SnapshotImpl对象都封装了一个SequenceNumber对象。
 class SnapshotImpl : public Snapshot {
  public:
   SnapshotImpl(SequenceNumber sequence_number)
@@ -32,6 +33,7 @@ class SnapshotImpl : public Snapshot {
   SnapshotImpl* prev_;
   SnapshotImpl* next_;
 
+  // 这是快照的本质，就是kv操作的序列号/时间戳
   const SequenceNumber sequence_number_;
 
 #if !defined(NDEBUG)
@@ -39,6 +41,8 @@ class SnapshotImpl : public Snapshot {
 #endif  // !defined(NDEBUG)
 };
 
+// SnapshotList是双向链表，里面的节点类型是SnapshotImpl，
+// 头部是最旧的快照，尾部是最新的快照。
 class SnapshotList {
  public:
   SnapshotList() : head_(0) {
@@ -47,17 +51,21 @@ class SnapshotList {
   }
 
   bool empty() const { return head_.next_ == &head_; }
+  // 返回最旧的快照，即头部的下一个节点
   SnapshotImpl* oldest() const {
     assert(!empty());
     return head_.next_;
   }
+  // 返回最新的快照，即尾部的上一个节点，代表最新的kv操作时间戳
   SnapshotImpl* newest() const {
     assert(!empty());
     return head_.prev_;
   }
 
   // Creates a SnapshotImpl and appends it to the end of the list.
+  // 创建一个快照，并将其追加到双向链表的末尾。因为末尾代表最新的kv操作时间戳。
   SnapshotImpl* New(SequenceNumber sequence_number) {
+    // 确保新的kv操作时间戳大于等于当前最新的kv操作时间戳
     assert(empty() || newest()->sequence_number_ <= sequence_number);
 
     SnapshotImpl* snapshot = new SnapshotImpl(sequence_number);
@@ -73,16 +81,22 @@ class SnapshotList {
   }
 
   // Removes a SnapshotImpl from this list.
+  // 从双向链表中删除一个快照。
   //
   // The snapshot must have been created by calling New() on this list.
+  // 快照必须是通过调用New()方法创建的。
   //
   // The snapshot pointer should not be const, because its memory is
   // deallocated. However, that would force us to change DB::ReleaseSnapshot(),
   // which is in the API, and currently takes a const Snapshot.
+  // 快照指针不应该是const，因为它的内存会被释放。但是，这将迫使我们更改DB::ReleaseSnapshot()，
+  // 它在API中，并且当前接受一个const快照。
   void Delete(const SnapshotImpl* snapshot) {
+    // 确保待删除的快照是由当前链表创建的
 #if !defined(NDEBUG)
     assert(snapshot->list_ == this);
 #endif  // !defined(NDEBUG)
+    // 从双向链表中移除快照并释放内存
     snapshot->prev_->next_ = snapshot->next_;
     snapshot->next_->prev_ = snapshot->prev_;
     delete snapshot;
@@ -90,6 +104,7 @@ class SnapshotList {
 
  private:
   // Dummy head of doubly-linked list of snapshots
+  // 快照双向链表的哨兵节点，不存储数据
   SnapshotImpl head_;
 };
 
