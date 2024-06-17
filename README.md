@@ -3,6 +3,7 @@
 LevelDB结构相对简单,不依赖于任何第三方库,具有很好的独立性,虽然其有针对性的对BigTable做了一定程度的简化,然而BigTable的主要技术思想与数据结构都体现在了LevelDB中。因此,LevelDB可以看作是BigTable的简化版或单机版。
 
 阅读LevelDB是为了后续更好的学习RocksDB做准备，在阅读过程中结合源码，并在源码处加入了自己的理解，以备后续复习。
+后续将从宏观上回顾LevelDB的读写流程，并写一些测试样例加深理解；之后就可以进一步的去学习RocksDB。
 
 [1. LevelDB公共基础类阅读](notes/LevelDB源码阅读1.md)
 

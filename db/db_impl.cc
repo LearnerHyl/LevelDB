@@ -1055,6 +1055,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
   // 遍历level和level+1层文件中的所有kv对
   // 若input->Valid()为true；且shutting_down_为false，则继续遍历
+  // NOTE：注意遍历的时候key出现的顺序是从新到旧
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
     // 无论当前处理的是哪一层的文件，都优先处理immutable memtable的compaction操作，即先执行minor compaction操作
@@ -1103,25 +1104,24 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
               0) {
         // First occurrence of this user key
         // 更新current_user_key内容
+        // NOTE:相同user key可能会有多个，seq越大表示越新，顺序越靠前
+        // 第一次碰到该user_key，标记has_current_user_key为true, sequence为max值
         current_user_key.assign(ikey.user_key.data(), ikey.user_key.size());
         has_current_user_key = true;
         // 更新最后一次见到的该user key的操作序列号，第一次遇到该user_key时，将其设置为kMaxSequenceNumber
         last_sequence_for_key = kMaxSequenceNumber;
       }
 
-      // 若不是第一次见关于该user key的kv对，则比较最近见到的kv对(不包括当前kv对)的操作序列号)与
-      // 本次compaction操作的最小快照，若小于等于最小快照，则当前kv对不需要写入到输出文件中
-      // 考虑对key1的操作，smallest=100,第一次操作是操作为100的insert，根据代码逻辑，操作是一定会成功的。
-      // 第二次操作为101，无论类型是什么，因为第一次操作为100, 根据下述逻辑，第二次操作会被drop掉。
-      // 若还有第三次操作103，那么第三次操作会成功，因为第二次操作的seq大于smallest。
-      // 这不会影响到最终查询结果，因为我们永远不会服务一个小于smallest的快照，因此100的insert是无效的，所以我们看不到这个数据。
-      // 若第二次是delete，虽然他会被drop掉，但是结果是一样的。若第二次是insert，那么会暂时有不一致性，但是这个不一致性是中间状态。
-      // 第三次一定会成功，所以从第三次开始，数据就会即时进入builder中。当次数大于3时，数据没问题，但是次数为2时，数据会被drop掉。
-      // 问题在于，若只有两次操作，第一次是insert，第二次还是insert，那么第二次会被drop掉，这是不是就意味着数据丢失了呢？
-      // FIXME:当某个user_key只有两次操作，且第一次操作等于smallest，第二次操作为insert时，第二次操作会被drop掉，这样会导致数据丢失。
+      // 由于多次Put/Delete，有些key会出现多次
+      // 有几种情况可以忽略key，在compact时丢弃：
+      // 1. 对于多次出现的user key，我们只关心最后写入的值 or >snapshot的值
+      //    通过设置last_sequence_for_key = kMaxSequenceNumber
+      //    以及跟compact->smallest_snapshot比较，可以分别保证这两点
+      // 2. 如果是删除key && <= snapshot && 更高层没有该key，那么也可以忽略
       if (last_sequence_for_key <= compact->smallest_snapshot) {
         // Hidden by an newer entry for same user key
-        // 之前遍历到了一个版本号小于当前版本号的kv对，丢弃，之后会有一个更新的kv对覆盖它
+        // 遍历过程中是从新版本到旧版本，所以若上次遍历到的key的seq小于最小快照值，那么这次肯定是更小于快照的。
+        // 我们只关心最新的结果，旧版本的无需在意。
         drop = true;  // (A)
       } else if (ikey.type == kTypeDeletion &&
                  ikey.sequence <= compact->smallest_snapshot &&

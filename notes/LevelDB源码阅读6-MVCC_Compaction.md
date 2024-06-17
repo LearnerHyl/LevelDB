@@ -250,51 +250,13 @@ size compaction的优先级要高于seek compaction，我们更喜欢由于某�
 
 具体见VersionSet::SetupOtherInputs方法中的逻辑。
 
-## 执行流程（难，有问题）
+## 执行流程
 
 BackGroundCompaction函数中有对所有类型Compaction操作的调度逻辑，是整体流程，着重阅读了需要进行文件合并拆分的compaction操作流程，核心函数是DoCompactionWork。
 
 Compaction操作的执行流程具体在DBImpl::DoCompactionWork函数中实现，结合源码理解。 首先要知道每个DBImpl实例中都会有自己的快照列表，本质上每个快照对象都封装了一个sequencenumber时间戳，每次compaction操作开始前都需要指定一个最小快照对象，小于等于最小快照中的时间戳的kv操作都不会被计入到compaction操作的输出文件中去。
 
-难点在于DoCompaction中的一段逻辑，我对这里的一个特殊情况不是特别了解，可能需要后面从全局上理顺逻辑后，这里就会理解了，先挖个坑：
-
-```c++
-// 若不是第一次见关于该user key的kv对，则比较最近见到的kv对(不包括当前kv对)的操作序列号)与
-      // 本次compaction操作的最小快照，若小于等于最小快照，则当前kv对不需要写入到输出文件中
-      // 考虑对key1的操作，smallest=100,第一次操作是操作为100的insert，根据代码逻辑，操作是一定会成功的。
-      // 第二次操作为101，无论类型是什么，因为第一次操作为100, 根据下述逻辑，第二次操作会被drop掉。
-      // 若还有第三次操作103，那么第三次操作会成功，因为第二次操作的seq大于smallest。
-      // 这不会影响到最终查询结果，因为我们永远不会服务一个小于smallest的快照，因此100的insert是无效的，所以我们看不到这个数据。
-      // 若第二次是delete，虽然他会被drop掉，但是结果是一样的。若第二次是insert，那么会暂时有不一致性，但是这个不一致性是中间状态。
-      // 第三次一定会成功，所以从第三次开始，数据就会即时进入builder中。当次数大于3时，数据没问题，但是次数为2时，数据会被drop掉。
-      // 问题在于，若只有两次操作，第一次是insert，第二次还是insert，那么第二次会被drop掉，这是不是就意味着数据丢失了呢？
-      // FIXME:当某个user_key只有两次操作，且第一次操作等于smallest，第二次操作为insert时，第二次操作会被drop掉，这样会导致数据丢失。
-      if (last_sequence_for_key <= compact->smallest_snapshot) {
-        // Hidden by an newer entry for same user key
-        // 之前遍历到了一个版本号小于当前版本号的kv对，丢弃，之后会有一个更新的kv对覆盖它
-        drop = true;  // (A)
-      } else if (ikey.type == kTypeDeletion &&
-                 ikey.sequence <= compact->smallest_snapshot &&
-                 compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
-        // 若当前kv对是一个删除操作，且其操作序列号小于等于compact->smallest_snapshot，
-        // 且该kv对的user key的最早版本在level+1层中,即更高层不会再有关于该键的操作出现，
-        // 那么该kv对不需要写入到输出文件中。
-        // For this user key:
-        // (1) there is no data in higher levels
-        // (2) data in lower levels will have larger sequence numbers
-        // (3) data in layers that are being compacted here and have
-        //     smaller sequence numbers will be dropped in the next
-        //     few iterations of this loop (by rule (A) above).
-        // Therefore this deletion marker is obsolete and can be dropped.
-        // 对于该user_key而言:
-        // (1) 除了当前level，在更高的level中没有该user_key的数据
-        // (2) 在更低的level中有更大的操作序列号
-        // (3) 根据规则(A)可知，在这里被compaction的level中，有更小操作序列号的数据将在接下来的几次迭代中被删除。
-        // 因此，这个删除标记是过时的，可以被删除。
-        drop = true;
-      }
-
-```
+因为我们不会服务小于等于这个最小快照的任何快照的服务。
 
 ## 文件清理
 
