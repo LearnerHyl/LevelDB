@@ -159,5 +159,7 @@ LevelDB在具体使用bloom filter时，又封装了FilterBlockBuilder和FilterB
 
 在查找一个key时，若Memtable中不存在该键，则需要逐层读取SSTable。读取SSTable之前，先通过bloom filter判断是否存在该键，如果不存在就直接返回；如果存在，则需要先将磁盘中的SSTable文件内容读取到内存保存。若该SSTable已经在内存中存在，则只需要进行一次内存读取操作；若该SSTable在内存中不存在，则需要增加一次磁盘读取操作。
 
+具体的逻辑在Table::InternalGet()函数中，我们已经找到了一个目标表(SSTable)，之后定位到目标data block后，首先通过其对应的filter data，提前确定该key是否在该这个data block中。
+
 理论上，我们希望经常使用多个SSTable内容尽量保存在内存中，但是现实中磁盘中的SSTable总大小一般会大于服务器内存大小，因此LevelDB提供了LRU Cache来管理内存。
 

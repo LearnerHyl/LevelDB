@@ -47,12 +47,13 @@ class BloomFilterPolicy : public FilterPolicy {
     size_t bytes = (bits + 7) / 8;
     bits = bytes * 8;
 
-    // 根据此次key预计占用bytes个字节，所以先将dst的大小设置为bytes，然后将dst的内容全部设置为0。
+    // 这批keys预计占用bytes个字节，所以先将dst的大小设置为bytes，然后将dst的内容全部设置为0。
+    // 在原有的内容上再扩容增加bytes个字节，然后将新增的bytes个字节全部设置为0。
     const size_t init_size = dst->size();
     // 将dst大小新增bytes个字节，然后将新增的bytes个字节全部设置为0。
     dst->resize(init_size + bytes, 0);
     // 将该过滤器的k_(哈希函数个数)写入dst中，用于后续的读取。
-    dst->push_back(static_cast<char>(k_));  // Remember # of probes in filter
+    dst->push_back(static_cast<char>(k_));
     // 将dst的地址赋值给array，然后将keys中的每个key都经过k_个哈希函数，然后将对应的bit位置设置为1。
     // 这里对应了BloomFilter写入元素的过程。
     char* array = &(*dst)[init_size];
@@ -71,7 +72,8 @@ class BloomFilterPolicy : public FilterPolicy {
         // 计算哈希值对应的bit位置
         const uint32_t bitpos = h % bits;
         // 将对应bit位置1，使用bit操作
-        // bitpos/8代表该bit在数组中属于哪个字节，1 << (bitpos % 8)代表该bit在字节中的位置
+        // bitpos/8代表该bit在数组中属于哪个字节，1 << (bitpos % 8)代表该bit在字节中的位置，
+        // 通过或操作将该key对应的bit位设置为1，这样不会影响原来的结果
         array[bitpos / 8] |= (1 << (bitpos % 8));
         // 增加h值，为下一次迭代计算新的哈希值
         h += delta;

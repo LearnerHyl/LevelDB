@@ -287,7 +287,7 @@ footer大小固定，为48字节，用来存储meta index block与index block在
 
 ![image-20240517183325646](./assets/image-20240517183325646.png)
 
-Meta index block's index和Index block's index这两个字段实际上都是BlockHandl结构体，用变长字段存储的，若前两个加起来不足40B（varint64的最长长度为10B，每个BlockHandle有offset_和size\_两个变量），则用padding填充到40B即可。具体代码请见format.h中的介绍。
+Meta index block's index和Index block's index这两个字段实际上都是BlockHandle结构体，用变长字段存储的，若前两个加起来不足40B（varint64的最长长度为10B，每个BlockHandle有offset_和size\_两个变量），则用padding填充到40B即可。具体代码请见format.h中的介绍。
 
 ## Data Block的结构
 
@@ -382,7 +382,7 @@ meta index block用来存储filter block在整个sstable中的索引信息。因
 其逻辑结构与Data Block完全一致，只是每个Entry中所包含的字段有所不同。Data Block是：
 
 ```c++
-kv Entry 1(sharedLen, nonSharedLen, valueLen, keyDelta, value)
+kv Entry-1(sharedLen, nonSharedLen, valueLen, keyDelta, value)
 ```
 
 而Index Block中的Entry有所不同：

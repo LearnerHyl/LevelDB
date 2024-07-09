@@ -74,8 +74,8 @@ class FilterBlockBuilder {
   std::string keys_;
   // start_保存每个key在keys_中的起始位置
   std::vector<size_t> start_;
-  // result_保存所有filter data, 同时也是最终形成的Filter Block的载体
-  std::string result_;  // Filter data computed so far
+  // result_保存已经生成的所有filter data, 同时也是最终形成的Filter Block的载体
+  std::string result_;
   // 当调用GenerateFilter(),且keys_中有新添加的key时，会将keys_中的key转化为Slice对象保存在tmp_keys_中，
   // 用于调用policy_->CreateFilter()方法生成filter
   std::vector<Slice> tmp_keys_;

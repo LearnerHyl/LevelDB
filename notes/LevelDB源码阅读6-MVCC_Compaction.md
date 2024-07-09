@@ -79,7 +79,7 @@ VersionSet负责将所有versions以双向链表的方式管理起来，每个Ve
 
 大概流程如下，其中涉及到了Manifest文件，该文件与版本控制息息相关，后面会详细介绍：
 
-1. 将VersionEdit通过Builder辅助类，应用到Versionset的current_版本上，会生成一个新的版本。
+1. 将VersionEdit通过Builder辅助类，应用到Versionset的current_版本上，会生成一个新的版本。此时会计算当前层中是否存在需要进行seek compaction的文件。
 2. 将版本变化写入到Manifest文件中，之后执行Finalize方法，检查最新版本中是否需要进行size compaction。
 3. 将新版本挂载到versionset双向链表中，将current版本更新为当前的最新版本。
 

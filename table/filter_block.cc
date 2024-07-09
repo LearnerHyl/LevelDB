@@ -59,7 +59,7 @@ Slice FilterBlockBuilder::Finish() {
   // 如上所述，这里是分别将array_offset和kFilterBaseLg写入到result_中
   PutFixed32(&result_, array_offset);
   result_.push_back(kFilterBaseLg);  // Save encoding parameter in result
-  // 此时result_本身就是一个filter
+  // 此时result_本身就是一个filter block，以slice对象的形式返回
   // block，返回一个Slice对象，指向result_的起始位置
   return Slice(result_);
 }
@@ -92,8 +92,9 @@ void FilterBlockBuilder::GenerateFilter() {
   }
 
   // Generate filter for current set of keys and append to result_.
-  // 为当前的keys_集合生成filter data，并将filter data追加到result_中
-  // 首先把本次将要生成的filter的起始位置保存到filter_offsets_中
+  // 为当前的keys_集合生成filter data，并将filter data追加到result_中。
+  // 首先将filter_offsets数组的起始位置偏移量放到filter_offsets_中，
+  // 不难理解filter_offsets_'s offset的值等于所有filter data的总大小，这由filter block的布局可以得出
   filter_offsets_.push_back(result_.size());
   // 调用FilterPolicy的CreateFilter()方法为当前的keys_集合生成filter data，
   // 并将filter data保存到result_中。
