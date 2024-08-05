@@ -10,13 +10,15 @@ MVCC是存储系统中常用来优化“读读并发”与“读写并发”并�
 
 想要实现MVCC，存储系统就要存储数据的多个版本。笔者将LevelDB的多版本存储设计分为了三个层次：
 
-**从key/value的角度：** 每次变更操作的记录（Batch Writer可视为一次操作）都有不同且递增的SequenceNumber。对于一个UserKey，当存在SequenceNumber更高的的记录时，旧的记录不会被立即删除，至少要在该SequenceNumber之前的所有Snapshot都被释放后才能删除（具体删除时间与Compaction时间有关）。这是LevelDB实现Snapshot Read的基础。
+**从key/value的角度：** 每次变更操作的记录（Batch Writer可视为一次操作）都有不同且递增的SequenceNumber，因此LevelDB的最小写入单位应该是一个batch，这个batch内的所有操作使用一个相同的sequenceNumber。对于一个UserKey，当存在SequenceNumber更高的的记录时，旧的记录不会被立即删除，至少要在该SequenceNumber之前的所有Snapshot都被释放后才能删除（具体删除时间与Compaction时间有关）。这是LevelDB实现Snapshot Read的基础。
 
 **从MemTable的角度：** LevelDB中的MemTable通过引用计数来控制释放时间。在需要读取MemTable时（无论是Get操作还是Minor Compaction时），读取前会增大其引用计数，读取后减小引用计数。这样，即使MemTable已被通过Minor Compaction操作写入到Level-0文件，MemTable在被读取，它就不会被释放。
 
 **从数据库文件的角度：** LevelDB的文件同样需要引用计数，当执行Major Compaction时，LevelDB不会立即删除已被合并的数据库文件，因为此时可能还有未完成的读取该文件的操作。
 
-key/value的版本实际上也是依赖于内存与稳定存储，其分别在Compaction与Put/Get操作中体现，因此这里我们主要关注后两者。MemTable的多版本与Snapshot信息是不需要直接持久化的，因为数据库关闭时无法进行Snapshot Read，也就没有了Snapshot的概念，而最新的MemTable会通过WAL重建，旧的MemTable也不再会被依赖。而数据库文件则不同，LevelDB必须记录数据库文件的版本信息，否则在数据库重启时无法快速确定哪些文件是有效的（LevelDB提供了文件版本信息损坏时的修复机制）。而LevelDB中Version及相关概念就是为此设计的。
+key/value的版本实际上也是依赖于内存与稳定存储，其分别在Compaction与Put/Get操作中体现，因此这里我们主要关注后两者。MemTable的多版本与Snapshot信息是不需要直接持久化的，因为数据库关闭时无法进行Snapshot Read，也就没有了Snapshot的概念，而最新的MemTable会通过WAL重建，旧的MemTable也不再会被依赖。
+
+- 而数据库文件则不同，LevelDB必须记录数据库文件的版本信息，否则在数据库重启时无法快速确定哪些文件是有效的（LevelDB提供了文件版本信息损坏时的修复机制）。而LevelDB中Version及相关概念就是为此设计的。
 
 本文主要围绕LevelDB中Version、VersionEdit、VersionSet的设计与实现介绍与分析。考虑到Compaction和Version的关系较为密切，因此这里会结合一些Compaction的内容一起来说明。
 
@@ -24,9 +26,9 @@ key/value的版本实际上也是依赖于内存与稳定存储，其分别在Co
 
 Leveldb每次新生成sstable文件，或者删除sstable文件，都会从一个版本升级成另外一个版本。换句话说，每次sstable文件的更替对于leveldb来说是一个最小的操作单元，具有原子性。版本控制对于leveldb来说至关重要，是保障数据正确性的重要机制。
 
-每当LevelDB触发了一次Compaction操作后，会在Leveli+1层生成一系列新的SSTable文件，作为输入的Level i层和Leveli+1层的原始SSTable文件在没有用户继续使用的情况下均可直接删除。LevelDB使用`Version`结构体来管理每个层级拥有的文件信息，每次compaction操作后会生成一个新的版本。Version结构体存储了当前层级的最新版本。
+每当LevelDB触发了一次Compaction操作后，会在Leveli+1层生成一系列新的SSTable文件，作为输入的Level i层和Leveli+1层的原始SSTable文件在没有用户继续使用的情况下均可直接删除。LevelDB使用`Version`结构体来管理每个层级拥有的文件信息，每次compaction操作后会生成一个新的版本。Version结构体存储当前层级的最新版本。
 
-在生成新版本的过程中，LevelDB使用一个中间状态的`VersionEdit`结构来临时保存信息，最后将当前版本的信息-Version存储了当前的最新版本信息，与中间状态的VersionEdit进行合并处理后，会生成最新的版本，并使用该版本。
+在生成新版本的过程中，LevelDB使用一个中间状态的`VersionEdit`结构来临时保存信息，最后将当前版本的信息-Version存储了当前的最新版本信息，与中间状态的VersionEdit进行合并处理后，生成最新的版本，并使用该版本。
 
 一系列版本构成一个版本集合，LevelDB中的`VersionSet`结构体负责存储版本集合，本身是一个双向链表结构。
 
@@ -43,6 +45,8 @@ Leveldb每次新生成sstable文件，或者删除sstable文件，都会从一�
 VersionEdit是一个版本的中间状态，用于保存一次Compaction操作后相当于当前版本产生的增量信息，如删除了哪些文件，以及相关的一些元数据；将VersionEdit信息应用到当前的版本Version上后，就可以生成最新的版本信息。代码位于version_edit.h和version_edit.cc文件中。
 
 因为VersionEdit是增量数据，因此并非每个VersionEdit中都有所有类型的数据，因此序列化VersionEdit的每种类型的数据前会将该类型对应的Tag以Varint32的编码方式写入到其数据之前。这样在序列化VersionEdit的数据时，可以有选择的序列化需要的字段，而不必每次都序列化所有的数据字段。
+
+> VersionEdit这里的可选择字段的思想类似于protobuf，我们可以有选择的适用我们需要的字段。
 
 ## Version机制-compaction策略
 
@@ -123,7 +127,7 @@ manifest文件专用于记录版本信息。leveldb采用了增量式的存储�
 
 一个Session Record可能包含以下字段：
 
-- Comparer的名称；
+- Comparerator的名称；
 - 最新的journal文件编号；
 - 下一个可以使用的文件编号；
 - 数据库已经持久化数据项中最大的sequence number；
@@ -216,7 +220,7 @@ LevelDB中Compaction具有优先级，其顺序为：Minor Compaction > Manual C
 
 ## 触发时机
 
-`size compaction`：当内存中的memtable写入超出限制后，则会将当前memtable转化为immutable memtable，通过minor compaction生成一个SSTable，并将其写入到Level 0之中，此时Level0的文件数量若超过限制，则会触发size compaction策略。
+`size compaction`：当内存中的memtable写入超出限制后，则会将当前memtable转化为immutable memtable，通过minor compaction生成一个SSTable，并将其写入到Level 0之中，此时Level0的文件数量若超过限制，则会触发size compaction策略。若是非Level0层文件，假设是i层，当该层文件的总大小大于10^i^ MB的时候，触发size compaction操作。
 
 `seek compaction`：当某文件的无效读取次数达到阈值时，触发这种压缩策略。
 
@@ -230,7 +234,7 @@ BackGroundCompaction函数是执行Compaction操作的入口。所有的逻辑�
 
 size compaction的优先级要高于seek compaction，我们更喜欢由于某个level中的数据过多而触发的compaction操作，这是compaction在设计时的理念之一。
 
-每一层中，要参与压缩的文件，以compact_pointer_为基础信息获取到的文件为准，与该文件的key范围重合的要参与；下一步，在上述文件集合基础上，在当前层中，是该集合文件的边界文件的文件也要参与。每次compaction操作时，level和level+1层的参与compaction的文件就是这么确定的。
+每一层中，要参与压缩的文件，以compact_pointer_为基础信息获取到的文件为准(这里与LevelDB的轮转compaction机制对应上，即每次压缩开始时都从上一次压缩结束的key之后的第一个key开始，确保每个文件都有机会参与压缩)，与该文件的key范围重合的要参与；下一步，在上述文件集合基础上，在当前层中，是该集合文件的边界文件的文件也要参与。每次compaction操作时，level和level+1层的参与compaction的文件就是这么确定的。
 
 > 边界文件：从compaction_files中提取最大的文件b1，然后在level_files中搜索一个文件b2，其中user_key(u1) = user_key(l2)，即b1文件的最大key的user_key等于b2文件的最小key的user_key。如果找到这样的文件b2(称为边界文件)，则将其添加到compaction_files中，然后使用这个新的上界再次搜索。
 >
@@ -254,7 +258,7 @@ size compaction的优先级要高于seek compaction，我们更喜欢由于某�
 
 BackGroundCompaction函数中有对所有类型Compaction操作的调度逻辑，是整体流程，着重阅读了需要进行文件合并拆分的compaction操作流程，核心函数是DoCompactionWork。
 
-Compaction操作的执行流程具体在DBImpl::DoCompactionWork函数中实现，结合源码理解。 首先要知道每个DBImpl实例中都会有自己的快照列表，本质上每个快照对象都封装了一个sequencenumber时间戳，每次compaction操作开始前都需要指定一个最小快照对象，小于等于最小快照中的时间戳的kv操作都不会被计入到compaction操作的输出文件中去。
+Compaction操作的执行流程具体在DBImpl::DoCompactionWork函数中实现，结合源码理解。 首先要知道每个DBImpl实例中都会有自己的快照列表，本质上每个快照对象都封装了一个sequencenumber时间戳（该时间戳时从某个version中的最大版本号得来的），每次compaction操作开始前都需要指定一个最小快照对象，小于等于最小快照中的时间戳的kv操作都不会被计入到compaction操作的输出文件中去。
 
 因为我们不会服务小于等于这个最小快照的任何快照的服务。
 

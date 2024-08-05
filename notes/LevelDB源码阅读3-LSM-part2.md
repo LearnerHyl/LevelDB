@@ -1,12 +1,10 @@
-
-
 # LevelDB的写入流程
 
 ## 宏观上的写入流程
 
 ![image-20240603092433841](./assets/image-20240603092433841.png)
 
-## kv的写入
+## kv的写入（LevelDB只支持单线程写入）
 
 <img src="./assets/Write.png" alt="Write" style="zoom: 80%;" />
 
@@ -61,15 +59,26 @@ leveldb提供持久化，也就是需要将内存中的数据保存到磁盘上�
 - 从**Immutable MemTable**(将要被刷到磁盘的MemTable)中查找数据
 - 从SST中查找数据，重点学习的部分。
 
-## MemTable中的查找逻辑-复习
+## MemTable中的查找逻辑-LookUpKey, internalKey, memtable key辨析
 
-MemTable的底层数据结构是跳表，因此查找是基于跳表的规则进行的。用户查询的UserKey会被封装成**LookupKey**结构进行查询，它本质就是一个**InternalKey**，他通过序列号支持查询历史版本，默认查询最新版本(`sequencenumber`取最大)。回顾一下Internal Key的格式：
+LookUpKey是InternalKey和memtable key的源头类，构造出LookUpKey后，可以从中分别得到后续两种key：
 
-![image-20240528210922745](./assets/image-20240528210922745.png)
+- internalKey是去掉key_length字段后剩余部分。
+- memtableKey则是原封不动的返回LookUpKey的内容。
 
-它将`LookupKey`转换成与MemTable中维护的entry相近的一种表示: `|internal_key_len | user_key | sequence_number |`。它在内部基于`SkipList`查找大于等于用户提交的`internal_key`的数据(基于`InternalKeyComparator`的比较策略)。找到数据以后，因为拿到的是大于等于的结果，所以进行`user_key`与`ValueType`的精确比对查询。
+MemTable的底层数据结构是跳表，因此查找是基于跳表的规则进行的。用户查询的UserKey会被封装成**LookupKey**结构进行查询，在memtable中进行查找时，构造一个LookUpKey后，从中提取出memtableKey进行查找即可。
 
-这部分源码之前已经做过学习，并且有相关注释，可以具体查看。
+```c++
+  // We construct a char array of the form:
+  //    klength  varint32               <-- start_
+  //    userkey  char[klength]          <-- kstart_
+  //    tag      uint64
+  //                                    <-- end_
+  // The array is a suitable MemTable key.
+  // The suffix starting with "userkey" can be used as an InternalKey.
+  // 这个数组是一个合适的MemTable key。
+  // 以"userkey"开头的后缀可以用作InternalKey。
+```
 
 ## 读取SSTable-TwoLevelIterator思想
 
@@ -92,7 +101,7 @@ MemTable的底层数据结构是跳表，因此查找是基于跳表的规则进
   - value 是指向一个对应 data block 的 BlockHandle.
 - 另一个是 data_iter_, 它指向 data block 包含的数据项. 至于这个 data block 是否与 index_iter_ 所指数据项对应 data block 一致, 那要看实际情况, 不过即使不一致也无碍.
 
-示意图如下:
+示意图如下：
 
 <img src="./assets/image-20240530164730111.png" alt="image-20240530164730111" style="zoom:67%;" />
 

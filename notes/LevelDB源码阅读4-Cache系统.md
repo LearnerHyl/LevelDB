@@ -116,7 +116,7 @@ leveldb利用上述的cache结构来缓存数据。其中：
 
 4. **哈希冲突处理**：`LRUHandle` 包含一个指向下一个哈希冲突节点的指针 `next_hash`，`next_hash`用于将同一个bucket中的元素组织起来。这里用于Extendible Hash Table。
 
-5. **节点元数据**：LRUHandle` 存储了节点的容量 `charge`、键的长度 `key_length`、是否在缓存中的标志 `in_cache` 以及键的哈希值 `hash`，这些元数据有助于高效管理和查找节点。
+5. **节点元数据**：`LRUHandle` 存储了节点的容量 `charge`、键的长度 `key_length`、是否在缓存中的标志 `in_cache` 以及键的哈希值 `hash`，这些元数据有助于高效管理和查找节点。
 
 6. **键值访问**：`LRUHandle` 提供一个 `key` 方法，通过返回一个 `Slice` 对象来访问键的数据。
 
@@ -139,6 +139,8 @@ Cache的两个链表是：
 - in-use：包含当前被客户端引用的条目，没有特定的顺序。(这个链表用于不变量检查。如果我们删除了这个检查，那么本来应该在这个链表中的元素可能会被留在孤立的单例链表中)。该链表中的LRUHandle的refs>=2，即被客户端引用。每个节点刚开始都会被缓存引用，因此初始的refs=1。
 
 - LRU：包含当前未被客户端引用的条目，按照LRU顺序排列。元素在这些链表之间移动是通过Ref()和Unref()方法完成的，当它们检测到缓存中的元素获取或失去唯一外部引用时。获取到外部引用的元素会从LRU链表中移动到in-use链表中，失去唯一外部引用的元素会从in-use链表中移动到LRU链表中。该队列中的LRUHandle的refs恒为1，即只有缓存引用，没有客户端引用。
+
+因为很显然，我们不会淘汰正在被客户端使用的Node，所以in-use中的对象不能被淘汰，该链表也就不必按照LRU的顺序维护；当没有客户端引用时，该节点会被放入LRU队列，就可以走LRU的流程淘汰节点。
 
 ### ShardedLRUCache
 
@@ -175,7 +177,7 @@ BlockCache是在TableCache的基础上，为了更方便的访问SSTable中的�
 BlockCache：
 
 - **key：** 当前table对应的缓存id，因为TableCache使用的是ShardedLRUCache，因此每个Cache都有自己的CacheID编号；第二个字段是BlockData在SSTable文件中的起始偏移量。
-- **Value：** 就是真实的BlockData数据。在代码中是以Cache::Handle形式存在，在该CacheHandle中存储的Value就是一个Block对象。
+- **Value：** 就是真实的BlockData数据。在代码中是以Cache::Handle形式存在，在该CacheHandle中存储的Value就是一个Block对象。value是查找的结果，是一个Block对象，找到该block后，在该block上创建一个迭代器，之后返回该迭代器，让client进行查找即可。
 
 ## BlockCache和TableCache概览
 

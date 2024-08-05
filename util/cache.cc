@@ -375,6 +375,8 @@ Cache::Handle* LRUCache::Lookup(const Slice& key, uint32_t hash) {
   }
   // 将LRUHandle转换为Cache::Handle，reinterpret_cast是强制类型转换，本质上是
   // 把待转化对象中的内容逐个bit拷贝到目标对象中
+  // 如果是BlockCache，则value存储的是Block对象的地址
+  // 如果是TableCache，则value存储的是TableAndFile对象的地址
   return reinterpret_cast<Cache::Handle*>(e);
 }
 

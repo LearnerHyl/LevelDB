@@ -51,11 +51,11 @@ Add操作会根据传入的参数信息，用压缩编码的方式构造出一�
 
 ## MemTable查找
 
-Memtable的查找分为Get()和Iterator查找两种，前者是点查询，后者可以遍历。首先一定要知道LookUpKey，具体请见dbformat.h文件中的定义，LookUpKey=userkey_len+userkey+sequencenumber(Tag)，在MemTable中查找kv对时需要通过LookUpKey，Get和Iterator方法皆是如此。
+Memtable的查找分为Get()和Iterator查找两种，前者是点查询，后者可以遍历。首先一定要知道LookUpKey，具体请见dbformat.h文件中的定义，LookUpKey=userkey_len+userkey+Tag，在MemTable中查找kv对时需要通过LookUpKey，Get和Iterator方法皆是如此。
 
 ### MemTable::Get()
 
-MemTable基于自身的跳表数据结构构造了一个迭代器，输入Lookupkey::memtable_key，进行点查询。
+MemTable基于自身的跳表数据结构构造了一个迭代器，输入Lookupkey::memtable_key，进行点查询；memtable_key的底层其实就是LookUpkey，只不过换了个名字而已。
 
 - 如果发现Memtable中存在该key对应的entry，则进一步判断该entry当前是还存在还是已经被delete了，若存在则返回查找结果，若已经被delete则返回NotFound。
 - 若Memtable中不存在该key对应的entry，则说明没存在过，返回false。
@@ -313,7 +313,7 @@ data block中存储的数据是leveldb中的keyvalue键值对。其中一个data
 
 ![img](./assets/entry_format.jpeg)
 
-1. 与前一条记录key共享部分的长度；可以从最近的restart点获取到共享数据的内容。
+1. 与前一条记录key共享部分的长度；可以从最近的restart点获取到共享数据的内容。所以我们找到合适的restartpoint后，还需要一条一条的解析迭代，才能得到最终的完整的目标key。
 2. 与前一条记录key不共享部分的长度；
 3. value长度；
 4. 与前一条记录key非共享的内容；

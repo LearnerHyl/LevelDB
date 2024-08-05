@@ -79,13 +79,14 @@ enum ValueType { kTypeDeletion = 0x0, kTypeValue = 0x1 };
 // 在Version_set.cc的SomeFileOverlapsWithRange()函数中，在搜索文件时，会使用kValueTypeForSeek。
 static const ValueType kValueTypeForSeek = kTypeValue;
 
+// SequenceNumber类中高56位存储sequenceNumber，低8位存储valueType，
+// 后续的解析部分说明了sequenceNumber位于高56位，valueType位于低8位
+// 即高7个字节存储sequenceNumber，低1个字节存储valueType
 typedef uint64_t SequenceNumber;
 
 // We leave eight bits empty at the bottom so a type and sequence#
 // can be packed together into 64-bits.
 // 0x1-ull：意味着是类型为unsigned long long的常量1
-// sequenceNum：一共有64位，8个字节。最高8位是type，低56位是sequence number。
-// 因此我们保留最高8位空间，这样type和sequence number可以被打包到64位中。
 static const SequenceNumber kMaxSequenceNumber = ((0x1ull << 56) - 1);
 
 struct ParsedInternalKey {
@@ -220,7 +221,8 @@ inline bool ParseInternalKey(const Slice& internal_key,
 
 // A helper class useful for DBImpl::Get()
 // 一个有用的辅助类，用于DBImpl::Get()
-// LookUpKey: key本身数据长度(注意不包括tag)+key本身数据+tag(sequence number)
+// LookUpKey: key本身数据长度(注意不包括tag)+key本身数据+tag-SequenceNumber类(seqnumber | valuetype)
+// seqnumber值占据高7个字节，valuetype值占据低1个字节
 // 用于在MemTable中查找key。此外,InternalKey是由userkey和tag组成的，没有key_len。
 class LookupKey {
  public:

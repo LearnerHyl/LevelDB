@@ -99,7 +99,7 @@ LevelDB提供了很多API接口，这里选择Open()、Get()、Put()、Write()�
 
 ### Manifest文件
 
-**Manifest文件**在LevelDB中扮演着关键的角色。让我来详细解释一下：
+**Manifest文件**在LevelDB中扮演着关键的角色：
 
 1. **元数据存储**：Manifest文件保存了整个LevelDB实例的元数据，其中包括了每一层中存在哪些SSTable（Sorted String Table）。
 
@@ -132,51 +132,6 @@ LevelDB提供了很多API接口，这里选择Open()、Get()、Put()、Write()�
 # 公用基础类
 
 LevelDB自行实现的一些独立于OS的API，Mutex和Condvar很常见，就不细说了，AtomicPtr是一种可以实现无锁原子读写操作的数据类型。可以类比一下OS提供的无锁原语：TAS、CAS等等。当前LevelDB已经移除了这个类型。
-
-## MemoryBarrier(如smp_mb())
-
-内存屏障在多核CPU中是非常重要，因为在多核CPU中，不同核之间的数据是不共享的，所以需要通过屏障来保证数据的一致性。
-
-有关内存屏障相关的文章，[内存屏障（Memory Barrier）究竟是个什么鬼？ - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/125737864)这篇讲的很好，可以看看细节。
-
-> **smp_mb() 这个内存屏障的操作会在执行后续的store操作之前，首先flush store buffer（也就是将之前的值写入到cacheline中）。**
-
-### 内存屏障例子：AtomicPtr的load和store
-
-这里AtomicPointer中的带有内存屏障的load和store函数进行说明这么安排的原因：
-
-```c++
-void* AtomicPointer::Acquire_Load() const {
-  void* result = rep_;
-  MemoryBarrier(); // 内存屏障
-  return result;
-}
-
-void AtomicPointer::Release_Store(void* v) {
-  MemoryBarrier(); // 内存屏障
-  rep_ = v;
-}
-```
-
-`Acquire_Load` 函数：
-
-- 在读取 `rep_` 的值之后立即执行内存屏障操作。
-- 这个内存屏障确保在返回 `rep_` 的值之前，所有之前的读取操作都已经完成，保证了在使用 `rep_` 值时的一致性和正确性。
-
-`Release_Store` 函数：
-
-- 在将传入的指针 `v` 赋值给 `rep_` 之前立即执行内存屏障操作。
-- 这个内存屏障确保在写入 `rep_` 之前，所有之前的写入操作对于后续的写入操作都是可见的，保证了其他线程能够看到这个写入操作，从而避免了数据不一致的情况。
-
-### 内存屏障总结
-
-内存屏障（Memory Barrier）是一种同步机制。
-
-内存屏障的作用是确保在多线程环境下对共享数据的访问操作的顺序性和可见性。它会告诉编译器和CPU在某个点之前的所有内存访问操作都完成（对于读操作）或者对其他线程可见（对于写操作）。
-
-内存屏障不会阻塞线程或者等待某些操作的完成，而是确保在某个时刻之前的所有内存访问操作都被执行或者对其他线程可见。这种机制是为了解决多线程并发访问共享数据时可能出现的问题，比如数据竞争、指令重排等。
-
-所以，可以将内存屏障看作是一种同步点，它确保在这个点之前的所有内存操作都已经完成或者对其他线程可见，从而保证了程序的正确性。
 
 ## 文件操作
 
@@ -478,6 +433,12 @@ batch.Put("key", "v3");
 此外，多个线程可以在不需要外部同步的情况下调用WriteBatch的const方法，但是如果任何一个线程可能调用一个非const方法，所有访问相同WriteBatch的线程都必须使用外部同步。
 
 有了以上的基础知识，不难理解WriteBatch的一些常规操作了，如Put、Delete操作，这些本质上都是按照上述的操作格式，依次将对应字节处的值，经过变长编码后依次追加存储。读取的时候要解码。
+
+### 最小原子写入单元：writebatch
+
+在LevelDB中，写操作通过`WriteBatch`对象进行。`WriteBatch`允许你将多个键值对更改捆绑在一起作为一个单独的原子操作写入数据库。这些更改在写入日志（WAL）中记录为一个单元，并在提交到数据库文件之前具有相同的`sequenceNumber`。
+
+这种设计意味着所有属于同一个`WriteBatch`的操作都会被视为一个原子事务处理，它们共享相同的`sequenceNumber`，确保了操作的一致性和原子性。这也有助于恢复和并发控制，因为系统可以准确地跟踪哪些操作是一起执行的。
 
 ### Manifest操作场景(这里是简单介绍)
 
